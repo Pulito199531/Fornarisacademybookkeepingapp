@@ -188,6 +188,37 @@ const ES = {
   "Every account with its transactions in order and a running balance — scroll to browse, or print/export a copy.": "Cada cuenta con sus transacciones en orden y un saldo acumulado — desplázate para explorar, o imprime/exporta una copia.",
   "Print": "Imprimir", "No transactions yet.": "Aún no hay transacciones.",
   "Ending balance": "Saldo final",
+  "Number (optional)": "Número (opcional)", "Number": "Número",
+  "Account number updated": "Número de cuenta actualizado",
+  "Vendor / Description": "Proveedor / Descripción", "e.g. Staples, Acme LLC": "ej. Staples, Acme LLC",
+  "Amount paid": "Monto pagado", "General Ledger Account": "Cuenta del Libro Mayor",
+  "uncleared": "sin compensar", "Print reconciliation report": "Imprimir reporte de conciliación",
+  "Prior reconciliations": "Conciliaciones anteriores", "Period": "Período",
+  "Beginning": "Inicial", "Ending": "Final", "View / Print": "Ver / Imprimir",
+  "Shortcuts": "Accesos rápidos", "Enter Invoice": "Nueva Factura", "Receive Payment": "Recibir Pago",
+  "Enter Bill": "Registrar Cuenta", "Pay Bills": "Pagar Cuentas", "Create Customer": "Crear Cliente",
+  "Create Vendor": "Crear Proveedor", "Journal Entry": "Asiento Contable", "Check Register": "Registro de Cheques",
+  "New vendor name (leave blank to cancel):": "Nombre del nuevo proveedor (deja en blanco para cancelar):",
+  "Vendor email (optional):": "Correo del proveedor (opcional):", "Vendor added": "Proveedor agregado",
+  "From": "De", "Bills (A/P)": "Cuentas por Pagar", "Track what you owe vendors and pay bills.": "Da seguimiento a lo que debes a proveedores y paga cuentas.",
+  "Outstanding (A/P)": "Pendiente (Cuentas por Pagar)", "Total owed": "Total adeudado", "Bills": "Cuentas",
+  "Manage vendors": "Gestionar proveedores", "+ Enter bill": "+ Registrar cuenta", "Vendor": "Proveedor",
+  "No bills yet.": "Aún no hay cuentas.", "← Back to bills": "← Volver a cuentas",
+  "Expense account": "Cuenta de gastos", "No vendors yet — ": "Aún no hay proveedores — ",
+  "Save bill": "Guardar cuenta", "Select a vendor": "Selecciona un proveedor", "Bill saved": "Cuenta guardada",
+  "Bill ": "Cuenta ", "Pay bill": "Pagar cuenta", "Also post to the ledger": "También registrar en el libro mayor",
+  "No accounts to show yet.": "Aún no hay cuentas para mostrar.",
+  "Every transaction in one account, in order, with a running balance — like a checkbook register.": "Cada transacción de una cuenta, en orden, con saldo acumulado — como un registro de chequera.",
+  "Account": "Cuenta", "No transactions in this account yet.": "Aún no hay transacciones en esta cuenta.",
+  "Journal Entries": "Asientos Contables", "Manually move amounts between accounts — each entry must balance to zero.": "Mueve montos manualmente entre cuentas — cada asiento debe cuadrar a cero.",
+  "New journal entry": "Nuevo asiento contable", "Memo": "Memo",
+  "e.g. Purchased equipment with cash": "ej. Compra de equipo en efectivo", "Lines": "Líneas",
+  "Amount (+ debit / − credit)": "Monto (+ débito / − crédito)", "Net total: ": "Total neto: ",
+  "Save journal entry": "Guardar asiento contable", "Recent entries": "Asientos recientes",
+  "Journal entry": "Asiento contable", "No journal entries yet.": "Aún no hay asientos contables.",
+  "Add at least two lines": "Agrega al menos dos líneas", "Journal entry saved": "Asiento contable guardado",
+  "Delete this journal entry? Both sides will be removed.": "¿Eliminar este asiento contable? Se eliminarán ambos lados.",
+  "Journal entry deleted": "Asiento contable eliminado",
 };
 
 let currentLang = state.lang;
@@ -409,8 +440,11 @@ function render() {
     dashboard: renderDashboard,
     accounts: renderAccounts,
     invoicing: renderInvoicing,
+    bills: renderBills,
     import: renderImport,
     transactions: renderTransactions,
+    checkRegister: renderCheckRegister,
+    journalEntries: renderJournalEntries,
     reconciliation: renderReconciliation,
     reports: renderReports,
     generalLedger: renderGeneralLedger,
@@ -440,6 +474,21 @@ async function renderDashboard() {
       </div>
     </div>
 
+    <div class="card">
+      <h2>${t('Shortcuts')}</h2>
+      <div class="shortcut-grid">
+        <button class="shortcut-btn" onclick="goToShortcut('invoicing','new')"><span class="shortcut-icon">🧾</span>${t('Enter Invoice')}</button>
+        <button class="shortcut-btn" onclick="goToShortcut('invoicing','list')"><span class="shortcut-icon">💵</span>${t('Receive Payment')}</button>
+        <button class="shortcut-btn" onclick="goToShortcut('bills','new')"><span class="shortcut-icon">📄</span>${t('Enter Bill')}</button>
+        <button class="shortcut-btn" onclick="goToShortcut('bills','list')"><span class="shortcut-icon">💳</span>${t('Pay Bills')}</button>
+        <button class="shortcut-btn" onclick="quickCreateCustomer()"><span class="shortcut-icon">👤</span>${t('Create Customer')}</button>
+        <button class="shortcut-btn" onclick="quickCreateVendor()"><span class="shortcut-icon">🏢</span>${t('Create Vendor')}</button>
+        <button class="shortcut-btn" onclick="goToShortcut('journalEntries')"><span class="shortcut-icon">📘</span>${t('Journal Entry')}</button>
+        <button class="shortcut-btn" onclick="goToShortcut('checkRegister')"><span class="shortcut-icon">📒</span>${t('Check Register')}</button>
+        <button class="shortcut-btn" onclick="window.print()"><span class="shortcut-icon">🖨️</span>${t('Print')}</button>
+      </div>
+    </div>
+
     <div class="card-row">
       <div class="card">
         <h2>${t('Needs attention')}</h2>
@@ -454,6 +503,37 @@ async function renderDashboard() {
       </div>
     </div>
   `;
+}
+
+// Dashboard shortcut handlers — jump to a tab and, for invoicing/bills, straight
+// into the "new" sub-view, mirroring QuickBooks' Home screen icons.
+function goToShortcut(tabName, subMode) {
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.remove('active'));
+  document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
+  state.tab = tabName;
+  if (tabName === 'invoicing') state.invoiceView = { mode: subMode === 'new' ? 'new' : 'list' };
+  if (tabName === 'bills') state.billView = { mode: subMode === 'new' ? 'new' : 'list' };
+  render();
+}
+
+async function quickCreateCustomer() {
+  const name = prompt(t('New client name (leave blank to cancel):'));
+  if (!name) return;
+  const email = prompt(t('Client email (optional):')) || null;
+  try {
+    await api('/clients', { method: 'POST', body: JSON.stringify({ business_id: state.currentBusinessId, name, email }) });
+    toast(t('Client added'));
+  } catch (e) { toast(e.message, true); }
+}
+
+async function quickCreateVendor() {
+  const name = prompt(t('New vendor name (leave blank to cancel):'));
+  if (!name) return;
+  const email = prompt(t('Vendor email (optional):')) || null;
+  try {
+    await api('/vendors', { method: 'POST', body: JSON.stringify({ business_id: state.currentBusinessId, name, email }) });
+    toast(t('Vendor added'));
+  } catch (e) { toast(e.message, true); }
 }
 
 // ---------- Chart of Accounts ----------
@@ -499,6 +579,7 @@ async function renderAccounts() {
             <option value="expense" selected>${t('Expense')}</option>
           </select>
         </div>
+        <div class="field" style="max-width:110px;"><label class="field-label">${t('Number (optional)')}</label><input type="text" id="acctCode" placeholder="5210"></div>
         <div class="field" style="max-width:120px; align-self:flex-end;">
           <button class="btn" id="addAcctBtn">${t('Add')}</button>
         </div>
@@ -519,7 +600,8 @@ async function renderAccounts() {
             <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; color:var(--ink-soft); margin-bottom:6px;">${typeLabels[type]}</div>
             ${accts.map(a => `
               <label style="display:flex; align-items:center; gap:8px; padding:4px 0; font-size:13px; ${existingNames.has(a.name) ? 'opacity:0.4;' : ''}">
-                <input type="checkbox" class="std-acct-check" value="${escapeHtml(a.name)}" data-type="${a.type}" data-subtype="${a.subtype || ''}" data-schedc="${a.schedule_c_line || ''}" ${existingNames.has(a.name) ? 'disabled checked' : ''}>
+                <input type="checkbox" class="std-acct-check" value="${escapeHtml(a.name)}" data-type="${a.type}" data-subtype="${a.subtype || ''}" data-schedc="${a.schedule_c_line || ''}" data-code="${a.code || ''}" ${existingNames.has(a.name) ? 'disabled checked' : ''}>
+                ${a.code ? `<span style="font-family:var(--font-mono); font-size:11px; color:var(--ink-soft);">${escapeHtml(a.code)}</span>` : ''}
                 ${escapeHtml(a.name)}
                 ${a.entityTypes && a.entityTypes.length ? `<span style="font-family:var(--font-mono); font-size:10px; color:var(--ink-soft);">(${a.entityTypes.join(', ')})</span>` : ''}
                 ${existingNames.has(a.name) ? `<span style="font-size:11px; color:var(--ink-soft);">— ${t('already added')}</span>` : ''}
@@ -538,11 +620,14 @@ async function renderAccounts() {
         </div>
         ${byType[type].length ? `
           <table class="ledger">
-            <thead><tr><th style="width:24px;"></th><th>${t('Name')}</th><th>${t('Schedule C')}</th><th></th></tr></thead>
+            <thead><tr><th style="width:24px;"></th><th>${t('Number')}</th><th>${t('Name')}</th><th>${t('Schedule C')}</th><th></th></tr></thead>
             <tbody>
               ${byType[type].map(a => `
                 <tr>
                   <td><input type="checkbox" class="acct-row-check" data-type="${type}" value="${a.id}"></td>
+                  <td style="color:var(--ink-soft); font-family:var(--font-mono); font-size:12px;">
+                    <input type="text" class="acct-code-edit" data-id="${a.id}" value="${escapeHtml(a.code || '')}" placeholder="—" style="width:60px; border:none; background:transparent; font-family:var(--font-mono); font-size:12px; padding:2px 0;">
+                  </td>
                   <td>${escapeHtml(a.name)}</td>
                   <td style="color:var(--ink-soft); font-family:var(--font-mono); font-size:12px;">${a.schedule_c_line || '—'}</td>
                   <td style="text-align:right;"><button class="btn secondary" style="padding:4px 10px; font-size:12px;" onclick="deleteAccount('${a.id}')">${t('Remove')}</button></td>
@@ -574,14 +659,25 @@ async function renderAccounts() {
   $('#addAcctBtn').onclick = async () => {
     const name = $('#acctName').value.trim();
     const type = $('#acctType').value;
+    const code = $('#acctCode').value.trim();
     if (!name) return toast(t('Enter an account name'), true);
     try {
-      await api('/accounts', { method: 'POST', body: JSON.stringify({ business_id: state.currentBusinessId, name, type }) });
+      await api('/accounts', { method: 'POST', body: JSON.stringify({ business_id: state.currentBusinessId, name, type, code: code || null }) });
       state.accounts = await api('/accounts?business_id=' + state.currentBusinessId);
       toast(t('Account added'));
       renderAccounts();
     } catch (e) { toast(e.message, true); }
   };
+
+  document.querySelectorAll('.acct-code-edit').forEach(input => {
+    input.onchange = async () => {
+      try {
+        await api('/accounts/' + input.dataset.id, { method: 'PATCH', body: JSON.stringify({ code: input.value.trim() || null }) });
+        state.accounts = await api('/accounts?business_id=' + state.currentBusinessId);
+        toast(t('Account number updated'));
+      } catch (e) { toast(e.message, true); }
+    };
+  });
 
   $('#browseStandardBtn').onclick = () => {
     const card = $('#standardListCard');
@@ -594,6 +690,7 @@ async function renderAccounts() {
     const accounts = checked.map(c => ({
       name: c.value, type: c.dataset.type,
       subtype: c.dataset.subtype || null, schedule_c_line: c.dataset.schedc || null,
+      code: c.dataset.code || null,
     }));
     try {
       const result = await api('/accounts/bulk', { method: 'POST', body: JSON.stringify({ business_id: state.currentBusinessId, accounts }) });
@@ -973,11 +1070,16 @@ function renderInvoiceForm() {
 
 async function renderInvoiceDetail(id) {
   const inv = await api('/invoices/' + id);
+  const business = state.businesses.find(b => b.id === state.currentBusinessId);
   main.innerHTML = `
     <h1 class="page-title">${t('Invoice ')}${inv.invoice_number}</h1>
     <p class="page-sub"><a href="#" onclick="state.invoiceView={mode:'list'}; renderInvoicing(); return false;" style="color:var(--ledger-green);">${t('← Back to invoices')}</a></p>
 
     <div class="card-row">
+      <div class="card">
+        <h2>${t('From')}</h2>
+        <p style="margin:0 0 4px; font-weight:500;">${escapeHtml(business.name)}</p>
+      </div>
       <div class="card">
         <h2>${t('Bill to')}</h2>
         <p style="margin:0 0 4px; font-weight:500;">${escapeHtml(inv.client ? inv.client.name : '—')}</p>
@@ -1059,6 +1161,282 @@ async function renderInvoiceDetail(id) {
         });
         toast(t('Payment recorded'));
         renderInvoiceDetail(id);
+      } catch (e) { toast(e.message, true); }
+    };
+  }
+}
+
+// ---------- Bills / Accounts Payable ----------
+state.billView = { mode: 'list' };
+let vendorsCache = [];
+
+async function renderBills() {
+  main.innerHTML = `<h1 class="page-title">${t('Bills (A/P)')}</h1><p class="page-sub">${t('Loading…')}</p>`;
+  vendorsCache = await api('/vendors?business_id=' + state.currentBusinessId);
+
+  if (state.billView.mode === 'new') return renderBillForm();
+  if (state.billView.mode === 'detail') return renderBillDetail(state.billView.id);
+  return renderBillList();
+}
+
+async function renderBillList() {
+  const bills = await api('/bills?business_id=' + state.currentBusinessId);
+  const aging = await api('/reports/ap-aging?business_id=' + state.currentBusinessId);
+
+  const statusColor = s => ({
+    draft: 'var(--ink-soft)', received: 'var(--ochre)', partial: 'var(--ochre)',
+    paid: 'var(--ledger-green)', overdue: 'var(--brick)', void: 'var(--ink-soft)',
+  }[s] || 'var(--ink-soft)');
+
+  main.innerHTML = `
+    <h1 class="page-title">${t('Bills (A/P)')}</h1>
+    <p class="page-sub">${t('Track what you owe vendors and pay bills.')}</p>
+
+    <div class="card-row">
+      <div class="card">
+        <h2>${t('Outstanding (A/P)')}</h2>
+        <div class="stat negative"><div class="label">${t('Total owed')}</div><div class="value">${fmt(aging.total_outstanding)}</div></div>
+      </div>
+      <div class="card">
+        <h2>${t('Aging')}</h2>
+        ${Object.entries(aging.buckets).map(([b, v]) => `<div class="pl-line"><span>${b}${t(' days')}</span><span class="amt">${fmt(v)}</span></div>`).join('')}
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+        <h2 style="margin:0;">${t('Bills')}</h2>
+        <div style="display:flex; gap:8px;">
+          <button class="btn secondary" id="manageVendorsBtn">${t('Manage vendors')}</button>
+          <button class="btn" id="newBillBtn">${t('+ Enter bill')}</button>
+        </div>
+      </div>
+      ${bills.length ? `
+        <table class="ledger">
+          <thead><tr><th>#</th><th>${t('Vendor')}</th><th>${t('Issued')}</th><th>${t('Due')}</th><th class="amount">${t('Total')}</th><th class="amount">${t('Balance')}</th><th>${t('Status')}</th></tr></thead>
+          <tbody>
+            ${bills.map(b => `
+              <tr style="cursor:pointer;" onclick="openBill('${b.id}')">
+                <td class="date">${b.bill_number}</td>
+                <td>${escapeHtml(b.vendor ? b.vendor.name : '—')}</td>
+                <td class="date">${b.issue_date}</td>
+                <td class="date">${b.due_date || '—'}</td>
+                <td class="amount">${fmt(b.total)}</td>
+                <td class="amount ${b.balance_due > 0 ? 'negative' : 'positive'}">${fmt(b.balance_due)}</td>
+                <td><span class="badge" style="background:transparent; border:1px solid ${statusColor(b.status)}; color:${statusColor(b.status)};">${t(b.status)}</span></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      ` : `<div class="empty-state"><div class="glyph">§</div>${t('No bills yet.')}</div>`}
+    </div>
+  `;
+
+  $('#newBillBtn').onclick = () => { state.billView = { mode: 'new' }; renderBills(); };
+  $('#manageVendorsBtn').onclick = openVendorManager;
+}
+
+function openBill(id) {
+  state.billView = { mode: 'detail', id };
+  renderBills();
+}
+
+async function openVendorManager() {
+  const name = prompt(t('New vendor name (leave blank to cancel):'));
+  if (!name) return;
+  const email = prompt(t('Vendor email (optional):')) || null;
+  try {
+    await api('/vendors', { method: 'POST', body: JSON.stringify({ business_id: state.currentBusinessId, name, email }) });
+    toast(t('Vendor added'));
+    renderBills();
+  } catch (e) { toast(e.message, true); }
+}
+
+function renderBillForm() {
+  const expenseAccounts = state.accounts.filter(a => a.type === 'expense');
+  main.innerHTML = `
+    <h1 class="page-title">${t('Enter Bill')}</h1>
+    <p class="page-sub"><a href="#" onclick="state.billView={mode:'list'}; renderBills(); return false;" style="color:var(--ledger-green);">${t('← Back to bills')}</a></p>
+
+    <div class="card">
+      <div class="field-row">
+        <div class="field">
+          <label class="field-label">${t('Vendor')}</label>
+          <select class="form-input" id="billVendor">
+            <option value="">${t('— select —')}</option>
+            ${vendorsCache.map(v => `<option value="${v.id}">${escapeHtml(v.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field"><label class="field-label">${t('Issue date')}</label><input type="date" id="billIssueDate" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="field"><label class="field-label">${t('Due date')}</label><input type="date" id="billDueDate"></div>
+        <div class="field">
+          <label class="field-label">${t('Expense account')}</label>
+          <select class="form-input" id="billExpenseAccount">
+            ${expenseAccounts.map(a => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+
+      ${vendorsCache.length === 0 ? `<p style="font-size:12.5px; color:var(--ochre);">${t('No vendors yet — ')}<a href="#" onclick="openVendorManager(); return false;" style="color:var(--ledger-green);">${t('add one first')}</a>.</p>` : ''}
+
+      <label class="field-label" style="margin-top:10px;">${t('Line items')}</label>
+      <table class="ledger" id="billLineItemsTable">
+        <thead><tr><th>${t('Description')}</th><th style="width:90px;">${t('Qty')}</th><th style="width:110px;">${t('Rate')}</th><th class="amount" style="width:110px;">${t('Amount')}</th><th></th></tr></thead>
+        <tbody id="billLineItemsBody"></tbody>
+      </table>
+      <button class="btn secondary" id="addBillLineBtn" style="margin-top:8px; padding:6px 12px; font-size:12.5px;">${t('+ Add line')}</button>
+
+      <div style="text-align:right; margin-top:16px; font-family:var(--font-display); font-size:20px; font-weight:600;">
+        ${t('Total: ')}<span id="billTotalDisplay">$0.00</span>
+      </div>
+
+      <div class="field" style="margin-top:14px;">
+        <label class="field-label">${t('Notes (optional)')}</label>
+        <input type="text" id="billNotes">
+      </div>
+
+      <button class="btn" id="saveBillBtn" style="margin-top:6px;">${t('Save bill')}</button>
+    </div>
+  `;
+
+  const body = $('#billLineItemsBody');
+  function addLine(desc = '', qty = 1, rate = 0) {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td><input type="text" class="bli-desc" value="${escapeHtml(desc)}"></td>
+      <td><input type="number" class="bli-qty" value="${qty}" step="0.01" style="width:100%;"></td>
+      <td><input type="number" class="bli-rate" value="${rate}" step="0.01" style="width:100%;"></td>
+      <td class="amount bli-amount">$0.00</td>
+      <td><button class="btn secondary" style="padding:3px 8px; font-size:11px;" onclick="this.closest('tr').remove(); recalcBillTotal();">✕</button></td>
+    `;
+    body.appendChild(row);
+    row.querySelectorAll('.bli-qty, .bli-rate').forEach(inp => inp.addEventListener('input', recalcBillTotal));
+    recalcBillTotal();
+  }
+  window.recalcBillTotal = function () {
+    let total = 0;
+    body.querySelectorAll('tr').forEach(row => {
+      const qty = parseFloat(row.querySelector('.bli-qty').value) || 0;
+      const rate = parseFloat(row.querySelector('.bli-rate').value) || 0;
+      const amt = qty * rate;
+      row.querySelector('.bli-amount').textContent = fmt(amt);
+      total += amt;
+    });
+    $('#billTotalDisplay').textContent = fmt(total);
+  };
+  addLine();
+  $('#addBillLineBtn').onclick = () => addLine();
+
+  $('#saveBillBtn').onclick = async () => {
+    const vendor_id = $('#billVendor').value;
+    if (!vendor_id) return toast(t('Select a vendor'), true);
+    const line_items = Array.from(body.querySelectorAll('tr')).map(row => ({
+      description: row.querySelector('.bli-desc').value.trim(),
+      quantity: parseFloat(row.querySelector('.bli-qty').value) || 0,
+      rate: parseFloat(row.querySelector('.bli-rate').value) || 0,
+    })).filter(li => li.description);
+    if (!line_items.length) return toast(t('Add at least one line item'), true);
+
+    try {
+      const bill = await api('/bills', {
+        method: 'POST',
+        body: JSON.stringify({
+          business_id: state.currentBusinessId,
+          vendor_id,
+          issue_date: $('#billIssueDate').value,
+          due_date: $('#billDueDate').value || null,
+          expense_account_id: $('#billExpenseAccount').value || null,
+          notes: $('#billNotes').value.trim() || null,
+          line_items,
+        }),
+      });
+      toast(t('Bill saved'));
+      state.billView = { mode: 'detail', id: bill.id };
+      renderBills();
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+async function renderBillDetail(id) {
+  const bill = await api('/bills/' + id);
+  main.innerHTML = `
+    <h1 class="page-title">${t('Bill ')}${bill.bill_number}</h1>
+    <p class="page-sub"><a href="#" onclick="state.billView={mode:'list'}; renderBills(); return false;" style="color:var(--ledger-green);">${t('← Back to bills')}</a></p>
+
+    <div class="card-row">
+      <div class="card">
+        <h2>${t('Vendor')}</h2>
+        <p style="margin:0 0 4px; font-weight:500;">${escapeHtml(bill.vendor ? bill.vendor.name : '—')}</p>
+        <p style="margin:0; color:var(--ink-soft); font-size:12.5px;">${escapeHtml(bill.vendor && bill.vendor.email || '')}</p>
+      </div>
+      <div class="card">
+        <h2>${t('Details')}</h2>
+        <div class="pl-line"><span>${t('Issued')}</span><span class="amt">${bill.issue_date}</span></div>
+        <div class="pl-line"><span>${t('Due')}</span><span class="amt">${bill.due_date || '—'}</span></div>
+        <div class="pl-line"><span>${t('Status')}</span><span class="amt">
+          <select class="form-input" id="billStatusSelect" style="width:auto; padding:4px 8px;">
+            ${['draft','received','partial','paid','overdue','void'].map(s => `<option value="${s}" ${s === bill.status ? 'selected' : ''}>${t(s)}</option>`).join('')}
+          </select>
+        </span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>${t('Line items')}</h2>
+      <table class="ledger">
+        <thead><tr><th>${t('Description')}</th><th class="amount">${t('Qty')}</th><th class="amount">${t('Rate')}</th><th class="amount">${t('Amount')}</th></tr></thead>
+        <tbody>
+          ${bill.line_items.map(li => `
+            <tr><td>${escapeHtml(li.description)}</td><td class="amount">${li.quantity}</td><td class="amount">${fmt(li.rate)}</td><td class="amount">${fmt(li.quantity * li.rate)}</td></tr>
+          `).join('')}
+        </tbody>
+      </table>
+      <div class="pl-total"><span>${t('Total')}</span><span>${fmt(bill.total)}</span></div>
+      <div class="pl-line"><span>${t('Paid')}</span><span class="amt">${fmt(bill.total - bill.balance_due)}</span></div>
+      <div class="pl-line" style="font-weight:600;"><span>${t('Balance due')}</span><span class="amt">${fmt(bill.balance_due)}</span></div>
+    </div>
+
+    <div class="card-row">
+      <div class="card">
+        <h2>${t('Payments')}</h2>
+        ${bill.payments.length ? bill.payments.map(p => `<div class="pl-line"><span>${p.date}${p.method ? ' — ' + escapeHtml(p.method) : ''}</span><span class="amt">${fmt(p.amount)}</span></div>`).join('') : `<p style="color:var(--ink-soft); font-size:13px;">${t('No payments recorded.')}</p>`}
+      </div>
+      ${bill.balance_due > 0.001 ? `
+      <div class="card">
+        <h2>${t('Pay bill')}</h2>
+        <div class="field"><label class="field-label">${t('Date')}</label><input type="date" id="billPayDate" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="field"><label class="field-label">${t('Amount')}</label><input type="number" step="0.01" id="billPayAmount" value="${bill.balance_due.toFixed(2)}"></div>
+        <div class="field"><label class="field-label">${t('Method (optional)')}</label><input type="text" id="billPayMethod" placeholder="${t('ACH, check, card…')}"></div>
+        <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; margin-bottom:10px;">
+          <input type="checkbox" id="billPayPostLedger" checked> ${t('Also post to the ledger')}
+        </label>
+        <button class="btn" id="recordBillPayBtn">${t('Pay bill')}</button>
+      </div>` : ''}
+    </div>
+  `;
+
+  $('#billStatusSelect').onchange = async (e) => {
+    await api('/bills/' + id, { method: 'PATCH', body: JSON.stringify({ status: e.target.value }) });
+    toast(t('Status updated'));
+  };
+
+  const payBtn = $('#recordBillPayBtn');
+  if (payBtn) {
+    payBtn.onclick = async () => {
+      const amount = parseFloat($('#billPayAmount').value);
+      if (!amount) return toast(t('Enter a payment amount'), true);
+      try {
+        await api(`/bills/${id}/payments`, {
+          method: 'POST',
+          body: JSON.stringify({
+            date: $('#billPayDate').value,
+            amount,
+            method: $('#billPayMethod').value.trim() || null,
+            post_to_ledger: $('#billPayPostLedger').checked,
+          }),
+        });
+        toast(t('Payment recorded'));
+        renderBillDetail(id);
       } catch (e) { toast(e.message, true); }
     };
   }
@@ -1263,7 +1641,7 @@ function accountOptionsGrouped(selectedId) {
     const accts = state.accounts.filter(a => a.type === g.type);
     if (!accts.length) return '';
     return `<optgroup label="${escapeHtml(g.label)}">
-      ${accts.map(a => `<option value="${a.id}" ${a.id === selectedId ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('')}
+      ${accts.map(a => `<option value="${a.id}" ${a.id === selectedId ? 'selected' : ''}>${a.code ? escapeHtml(a.code) + ' — ' : ''}${escapeHtml(a.name)}</option>`).join('')}
     </optgroup>`;
   }).join('');
 }
@@ -1286,15 +1664,18 @@ function openQuickAddAccountModal(onCreated, onCancel) {
     <div class="card" style="width:360px; margin:0;">
       <h2>${t('Add new account')}</h2>
       <div class="field"><label class="field-label">${t('Name')}</label><input type="text" id="qaAcctName" placeholder="${t('e.g. Client Revenue')}"></div>
-      <div class="field">
-        <label class="field-label">${t('Type')}</label>
-        <select class="form-input" id="qaAcctType">
-          <option value="expense" selected>${t('Expense')}</option>
-          <option value="income">${t('Income ').trim()}</option>
-          <option value="equity">${t('Equity')}</option>
-          <option value="asset">${t('Asset')}</option>
-          <option value="liability">${t('Liability')}</option>
-        </select>
+      <div class="field-row">
+        <div class="field">
+          <label class="field-label">${t('Type')}</label>
+          <select class="form-input" id="qaAcctType">
+            <option value="expense" selected>${t('Expense')}</option>
+            <option value="income">${t('Income ').trim()}</option>
+            <option value="equity">${t('Equity')}</option>
+            <option value="asset">${t('Asset')}</option>
+            <option value="liability">${t('Liability')}</option>
+          </select>
+        </div>
+        <div class="field" style="max-width:120px;"><label class="field-label">${t('Number (optional)')}</label><input type="text" id="qaAcctCode" placeholder="5210"></div>
       </div>
       <div style="display:flex; gap:8px; margin-top:6px;">
         <button class="btn" id="qaAcctSaveBtn">${t('Add')}</button>
@@ -1312,9 +1693,10 @@ function openQuickAddAccountModal(onCreated, onCancel) {
   document.getElementById('qaAcctSaveBtn').onclick = async () => {
     const name = document.getElementById('qaAcctName').value.trim();
     const type = document.getElementById('qaAcctType').value;
+    const code = document.getElementById('qaAcctCode').value.trim();
     if (!name) return toast(t('Enter an account name'), true);
     try {
-      const newAccount = await api('/accounts', { method: 'POST', body: JSON.stringify({ business_id: state.currentBusinessId, name, type }) });
+      const newAccount = await api('/accounts', { method: 'POST', body: JSON.stringify({ business_id: state.currentBusinessId, name, type, code: code || null }) });
       state.accounts = await api('/accounts?business_id=' + state.currentBusinessId);
       close();
       onCreated(newAccount);
@@ -1372,10 +1754,10 @@ async function renderTransactions() {
       <h2>${t('Add manual entry')}</h2>
       <div class="field-row">
         <div class="field"><label class="field-label">${t('Date')}</label><input type="date" id="manDate"></div>
-        <div class="field" style="flex:2;"><label class="field-label">${t('Description')}</label><input type="text" id="manDesc"></div>
-        <div class="field"><label class="field-label">${t('Amount')}</label><input type="number" step="0.01" id="manAmount" placeholder="-42.19 or 1500.00"></div>
+        <div class="field" style="flex:2;"><label class="field-label">${t('Vendor / Description')}</label><input type="text" id="manDesc" placeholder="${t('e.g. Staples, Acme LLC')}"></div>
+        <div class="field"><label class="field-label">${t('Amount paid')}</label><input type="number" step="0.01" id="manAmount" placeholder="-42.19 or 1500.00"></div>
         <div class="field" style="flex:1.4;">
-          <label class="field-label">${t('Category')}</label>
+          <label class="field-label">${t('General Ledger Account')}</label>
           <select class="form-input" id="manAccount">
             ${accountOptionsGrouped(null)}
           </select>
@@ -1463,10 +1845,12 @@ async function renderReconciliation() {
       </select>
     </div>
     <div id="reconBody"></div>
+    <div id="reconHistory"></div>
   `;
 
   $('#reconStmtSelect').onchange = loadReconciliation;
   await loadReconciliation();
+  await loadReconciliationHistory();
 }
 
 async function loadReconciliation() {
@@ -1475,6 +1859,7 @@ async function loadReconciliation() {
   const txns = summary.transactions;
   const isLocked = summary.is_locked;
   const hasBalances = summary.beginning_balance !== null && summary.ending_balance !== null;
+  const unclearedCount = txns.filter(t => !t.is_reconciled).length;
 
   $('#reconBody').innerHTML = `
     <div class="card">
@@ -1495,13 +1880,15 @@ async function loadReconciliation() {
         ? `<div class="recon-strip">${t('Enter a beginning and ending balance above to start reconciling.')}</div>`
         : summary.is_balanced
           ? `<div class="recon-strip match">✓ ${t('Difference is $0.00 — ready to finish.')}</div>`
-          : `<div class="recon-strip mismatch">⚠ ${t('Check off transactions until the difference reaches $0.00.')}</div>`}
-      ${isLocked
-        ? `<div style="display:flex; gap:10px; align-items:center;">
-             <p style="color:var(--ink-soft); font-size:13px; margin:0;">${t('This period is reconciled and locked.')}</p>
-             <button class="btn secondary" id="unlockBtn" style="padding:6px 14px; font-size:12.5px;">${t('Unlock')}</button>
-           </div>`
-        : `<button class="btn" id="finishBtn" ${hasBalances && summary.is_balanced ? '' : 'disabled'}>${t('Finish now')}</button>`}
+          : `<div class="recon-strip mismatch">⚠ ${t('Check off transactions until the difference reaches $0.00.')} ${unclearedCount ? `(${unclearedCount} ${t('uncleared')})` : ''}</div>`}
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        ${isLocked
+          ? `<p style="color:var(--ink-soft); font-size:13px; margin:0;">${t('This period is reconciled and locked.')}</p>
+             <button class="btn secondary" id="unlockBtn" style="padding:6px 14px; font-size:12.5px;">${t('Unlock')}</button>`
+          : `<button class="btn" id="finishBtn" ${hasBalances && summary.is_balanced ? '' : 'disabled'}>${t('Finish now')}</button>`}
+        <button class="btn secondary" id="printReconBtn">${t('Print reconciliation report')}</button>
+        <a class="btn secondary" style="text-decoration:none;" href="/api/reconciliation/report/pdf?business_id=${state.currentBusinessId}&statement_id=${statementId}" target="_blank">${t('Download PDF')}</a>
+      </div>
     </div>
 
     <div class="card">
@@ -1509,7 +1896,7 @@ async function loadReconciliation() {
         <thead><tr><th style="width:24px;"></th><th>${t('Date')}</th><th>${t('Description')}</th><th class="amount">${t('Amount')}</th><th>${t('Category')}</th></tr></thead>
         <tbody>
           ${txns.map(tx => `
-            <tr>
+            <tr class="${!tx.is_reconciled ? 'uncleared-row' : ''}">
               <td><input type="checkbox" class="clear-check" data-id="${tx.id}" data-amount="${tx.amount}" ${tx.is_reconciled ? 'checked' : ''} ${isLocked ? 'disabled' : ''}></td>
               <td class="date">${tx.date}</td>
               <td>${escapeHtml(tx.description)}</td>
@@ -1537,6 +1924,8 @@ async function loadReconciliation() {
       loadReconciliation();
     } catch (e) { toast(e.message, true); }
   };
+
+  $('#printReconBtn').onclick = () => window.print();
 
   // Live-update the difference as checkboxes are toggled, without waiting on
   // a server round trip each click — same feel as QuickBooks' reconcile screen.
@@ -1571,6 +1960,7 @@ async function loadReconciliation() {
       await api('/reconciliation/lock', { method: 'POST', body: JSON.stringify({ business_id: state.currentBusinessId, statement_id: statementId }) });
       toast(t('Period locked'));
       loadReconciliation();
+      loadReconciliationHistory();
     };
   }
 
@@ -1580,8 +1970,37 @@ async function loadReconciliation() {
       await api('/reconciliation/unlock', { method: 'POST', body: JSON.stringify({ business_id: state.currentBusinessId, statement_id: statementId }) });
       toast(t('Period unlocked'));
       loadReconciliation();
+      loadReconciliationHistory();
     };
   }
+}
+
+async function loadReconciliationHistory() {
+  const periods = await api('/reconciliation/periods?business_id=' + state.currentBusinessId);
+  if (!periods.length) { $('#reconHistory').innerHTML = ''; return; }
+
+  $('#reconHistory').innerHTML = `
+    <div class="card">
+      <h2>${t('Prior reconciliations')}</h2>
+      <table class="ledger">
+        <thead><tr><th>${t('Statement')}</th><th>${t('Period')}</th><th class="amount">${t('Beginning')}</th><th class="amount">${t('Ending')}</th><th>${t('Locked')}</th><th></th></tr></thead>
+        <tbody>
+          ${periods.map(p => `
+            <tr>
+              <td>${escapeHtml(p.source_name || t('Statement'))}</td>
+              <td class="date">${p.period_start} → ${p.period_end}</td>
+              <td class="amount">${fmt(p.starting_balance)}</td>
+              <td class="amount">${fmt(p.ending_balance)}</td>
+              <td class="date">${p.locked_at ? p.locked_at.slice(0, 10) : '—'}</td>
+              <td style="text-align:right;">
+                <a class="btn secondary" style="padding:4px 10px; font-size:12px; text-decoration:none;" href="/api/reconciliation/report/pdf?business_id=${state.currentBusinessId}&statement_id=${p.statement_id}" target="_blank">${t('View / Print')}</a>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
 }
 
 // ---------- Reports ----------
@@ -1686,6 +2105,155 @@ async function renderGeneralLedger() {
   `;
 
   $('#printGlBtn').onclick = () => window.print();
+}
+
+// ---------- Check Register ----------
+async function renderCheckRegister() {
+  main.innerHTML = `<h1 class="page-title">${t('Check Register')}</h1><p class="page-sub">${t('Loading…')}</p>`;
+  const bankAccounts = state.accounts.filter(a => a.type === 'asset');
+  if (!bankAccounts.length) {
+    main.innerHTML = `<h1 class="page-title">${t('Check Register')}</h1><div class="empty-state"><div class="glyph">§</div>${t('No accounts to show yet.')}</div>`;
+    return;
+  }
+  if (!state.registerAccountId || !bankAccounts.some(a => a.id === state.registerAccountId)) {
+    // Prefer an actual checking/cash-style account over whatever sorts first
+    // alphabetically (e.g. "Accounts Receivable") — that's what "check register" means.
+    const preferred = bankAccounts.find(a => /check|cash|bank/i.test(a.name)) || bankAccounts[0];
+    state.registerAccountId = preferred.id;
+  }
+
+  main.innerHTML = `
+    <h1 class="page-title">${t('Check Register')}</h1>
+    <p class="page-sub">${t('Every transaction in one account, in order, with a running balance — like a checkbook register.')}</p>
+    <div class="field" style="max-width:320px;">
+      <label class="field-label">${t('Account')}</label>
+      <select class="form-input" id="registerAccountSelect">
+        ${bankAccounts.map(a => `<option value="${a.id}" ${a.id === state.registerAccountId ? 'selected' : ''}>${a.code ? escapeHtml(a.code) + ' — ' : ''}${escapeHtml(a.name)}</option>`).join('')}
+      </select>
+    </div>
+    <div id="registerBody"></div>
+  `;
+
+  $('#registerAccountSelect').onchange = (e) => { state.registerAccountId = e.target.value; loadCheckRegister(); };
+  await loadCheckRegister();
+}
+
+async function loadCheckRegister() {
+  const ledger = await api('/reports/general-ledger?business_id=' + state.currentBusinessId);
+  const acct = ledger.find(a => a.account_id === state.registerAccountId);
+  const txns = acct ? acct.transactions : [];
+
+  $('#registerBody').innerHTML = `
+    <div class="card">
+      <div style="display:flex; gap:10px; margin-bottom:14px;">
+        <button class="btn secondary" id="printRegisterBtn">${t('Print')}</button>
+      </div>
+      <table class="ledger">
+        <thead><tr><th>${t('Date')}</th><th>${t('Description')}</th><th class="amount">${t('Amount')}</th><th class="amount">${t('Balance')}</th></tr></thead>
+        <tbody>
+          ${txns.length ? txns.map(tx => `
+            <tr>
+              <td class="date">${tx.date}</td>
+              <td>${escapeHtml(tx.description)}</td>
+              <td class="amount ${tx.amount >= 0 ? 'positive' : 'negative'}">${fmt(tx.amount)}</td>
+              <td class="amount">${fmt(tx.running_balance)}</td>
+            </tr>
+          `).join('') : `<tr><td colspan="4" style="text-align:center; color:var(--ink-soft); padding:20px;">${t('No transactions in this account yet.')}</td></tr>`}
+        </tbody>
+      </table>
+      ${txns.length ? `<div class="gl-ending-balance"><span>${t('Ending balance')}</span><span>${fmt(acct.total)}</span></div>` : ''}
+    </div>
+  `;
+  $('#printRegisterBtn').onclick = () => window.print();
+}
+
+// ---------- Journal Entries ----------
+async function renderJournalEntries() {
+  main.innerHTML = `<h1 class="page-title">${t('Journal Entries')}</h1><p class="page-sub">${t('Loading…')}</p>`;
+  const entries = await api('/journal-entries?business_id=' + state.currentBusinessId);
+
+  main.innerHTML = `
+    <h1 class="page-title">${t('Journal Entries')}</h1>
+    <p class="page-sub">${t('Manually move amounts between accounts — each entry must balance to zero.')}</p>
+
+    <div class="card">
+      <h2>${t('New journal entry')}</h2>
+      <div class="field-row">
+        <div class="field" style="max-width:200px;"><label class="field-label">${t('Date')}</label><input type="date" id="jeDate" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="field"><label class="field-label">${t('Memo')}</label><input type="text" id="jeMemo" placeholder="${t('e.g. Purchased equipment with cash')}"></div>
+      </div>
+      <label class="field-label" style="margin-top:6px;">${t('Lines')}</label>
+      <table class="ledger" id="jeLinesTable">
+        <thead><tr><th>${t('Account')}</th><th class="amount" style="width:160px;">${t('Amount (+ debit / − credit)')}</th><th></th></tr></thead>
+        <tbody id="jeLinesBody"></tbody>
+      </table>
+      <button class="btn secondary" id="addJeLineBtn" style="margin-top:8px; padding:6px 12px; font-size:12.5px;">${t('+ Add line')}</button>
+      <div style="text-align:right; margin-top:12px; font-family:var(--font-mono); font-size:13px;">
+        ${t('Net total: ')}<span id="jeNetTotal">$0.00</span>
+      </div>
+      <button class="btn" id="saveJeBtn" style="margin-top:10px;">${t('Save journal entry')}</button>
+    </div>
+
+    <div class="card">
+      <h2>${t('Recent entries')}</h2>
+      ${entries.length ? entries.map(e => `
+        <div style="border-bottom:1px solid var(--rule); padding:10px 0;">
+          <div style="display:flex; justify-content:space-between; align-items:baseline;">
+            <span style="font-weight:500;">${e.date} — ${escapeHtml(e.memo || t('Journal entry'))}</span>
+            <button class="btn secondary" style="padding:3px 8px; font-size:11px;" onclick="deleteJournalEntry('${e.id}')">${t('Delete')}</button>
+          </div>
+          ${e.lines.map(l => `<div class="pl-line" style="padding-left:12px;"><span>${escapeHtml(l.account_name)}</span><span class="amt">${fmt(l.amount)}</span></div>`).join('')}
+        </div>
+      `).join('') : `<p style="color:var(--ink-soft); font-size:13px;">${t('No journal entries yet.')}</p>`}
+    </div>
+  `;
+
+  const body = $('#jeLinesBody');
+  function addJeLine() {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td><select class="form-input je-account">${accountOptionsGrouped(null).replace('<option value="__new__">' + t('+ Add new account…') + '</option>', '')}</select></td>
+      <td><input type="number" step="0.01" class="je-amount" style="width:100%; text-align:right;" placeholder="0.00"></td>
+      <td><button class="btn secondary" style="padding:3px 8px; font-size:11px;" onclick="this.closest('tr').remove(); recalcJeTotal();">✕</button></td>
+    `;
+    body.appendChild(row);
+    row.querySelector('.je-amount').addEventListener('input', recalcJeTotal);
+    recalcJeTotal();
+  }
+  window.recalcJeTotal = function () {
+    let total = 0;
+    body.querySelectorAll('.je-amount').forEach(inp => { total += parseFloat(inp.value) || 0; });
+    total = Math.round(total * 100) / 100;
+    const el = $('#jeNetTotal');
+    el.textContent = fmt(total);
+    el.style.color = Math.abs(total) < 0.005 ? 'var(--ledger-green)' : 'var(--brick)';
+  };
+  addJeLine();
+  addJeLine();
+  $('#addJeLineBtn').onclick = addJeLine;
+
+  $('#saveJeBtn').onclick = async () => {
+    const date = $('#jeDate').value;
+    const memo = $('#jeMemo').value.trim();
+    const lines = [...body.querySelectorAll('tr')].map(row => ({
+      account_id: row.querySelector('.je-account').value,
+      amount: parseFloat(row.querySelector('.je-amount').value) || 0,
+    })).filter(l => l.amount !== 0);
+
+    if (lines.length < 2) return toast(t('Add at least two lines'), true);
+    try {
+      await api('/journal-entries', { method: 'POST', body: JSON.stringify({ business_id: state.currentBusinessId, date, memo, lines }) });
+      toast(t('Journal entry saved'));
+      renderJournalEntries();
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+async function deleteJournalEntry(id) {
+  if (!confirm(t('Delete this journal entry? Both sides will be removed.'))) return;
+  await api('/journal-entries/' + id, { method: 'DELETE' });
+  toast(t('Journal entry deleted'));
+  renderJournalEntries();
 }
 
 init();

@@ -14,6 +14,7 @@ const plaid = require('./plaid');
 const { renderInvoicePdf, invoicePdfBuffer } = require('./invoicePdf');
 const { renderFinancialStatementsPdf, financialStatementsPdfBuffer } = require('./financialStatementsPdf');
 const { renderGeneralLedgerPdf } = require('./generalLedgerPdf');
+const { renderReconciliationReportPdf } = require('./reconciliationReportPdf');
 const email = require('./email');
 const auth = require('./auth');
 
@@ -90,12 +91,12 @@ app.post('/api/businesses', (req, res) => {
     .run(uuid(), id, req.user.id, 'owner');
 
   const insertAccount = db.prepare(`
-    INSERT INTO accounts (id, business_id, name, type, subtype, schedule_c_line)
-    VALUES (?,?,?,?,?,?)
+    INSERT INTO accounts (id, business_id, name, type, subtype, schedule_c_line, code)
+    VALUES (?,?,?,?,?,?,?)
   `);
   const seed = db.transaction(() => {
     for (const a of getDefaultAccounts(entity_type)) {
-      insertAccount.run(uuid(), id, a.name, a.type, a.subtype || null, a.schedule_c_line || null);
+      insertAccount.run(uuid(), id, a.name, a.type, a.subtype || null, a.schedule_c_line || null, a.code || null);
     }
   });
   seed();
@@ -137,12 +138,12 @@ app.post('/api/businesses/:id/seed-entity-accounts', auth.requireBusinessAccess(
   const toAdd = getDefaultAccounts(entity_type).filter(a => !existingNames.has(a.name));
 
   const insertAccount = db.prepare(`
-    INSERT INTO accounts (id, business_id, name, type, subtype, schedule_c_line)
-    VALUES (?,?,?,?,?,?)
+    INSERT INTO accounts (id, business_id, name, type, subtype, schedule_c_line, code)
+    VALUES (?,?,?,?,?,?,?)
   `);
   const run = db.transaction(() => {
     for (const a of toAdd) {
-      insertAccount.run(uuid(), req.params.id, a.name, a.type, a.subtype || null, a.schedule_c_line || null);
+      insertAccount.run(uuid(), req.params.id, a.name, a.type, a.subtype || null, a.schedule_c_line || null, a.code || null);
     }
   });
   run();
@@ -209,12 +210,12 @@ app.get('/api/accounts/standard-list', (req, res) => {
 });
 
 app.post('/api/accounts', auth.requireBusinessAccess(), auth.requireWriteAccess, (req, res) => {
-  const { business_id, name, type, subtype, schedule_c_line } = req.body;
+  const { business_id, name, type, subtype, schedule_c_line, code } = req.body;
   if (!name || !type) return res.status(400).json({ error: 'name and type required' });
   const id = uuid();
   try {
-    db.prepare(`INSERT INTO accounts (id, business_id, name, type, subtype, schedule_c_line) VALUES (?,?,?,?,?,?)`)
-      .run(id, business_id, name, type, subtype || null, schedule_c_line || null);
+    db.prepare(`INSERT INTO accounts (id, business_id, name, type, subtype, schedule_c_line, code) VALUES (?,?,?,?,?,?,?)`)
+      .run(id, business_id, name, type, subtype || null, schedule_c_line || null, code || null);
     res.json(db.prepare('SELECT * FROM accounts WHERE id = ?').get(id));
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -231,13 +232,13 @@ app.post('/api/accounts/bulk', auth.requireBusinessAccess(), auth.requireWriteAc
     db.prepare('SELECT name FROM accounts WHERE business_id = ?').all(business_id).map(a => a.name)
   );
   const insertAccount = db.prepare(`
-    INSERT INTO accounts (id, business_id, name, type, subtype, schedule_c_line) VALUES (?,?,?,?,?,?)
+    INSERT INTO accounts (id, business_id, name, type, subtype, schedule_c_line, code) VALUES (?,?,?,?,?,?,?)
   `);
   const added = [];
   const run = db.transaction(() => {
     for (const a of accounts) {
       if (!a.name || !a.type || existingNames.has(a.name)) continue;
-      insertAccount.run(uuid(), business_id, a.name, a.type, a.subtype || null, a.schedule_c_line || null);
+      insertAccount.run(uuid(), business_id, a.name, a.type, a.subtype || null, a.schedule_c_line || null, a.code || null);
       added.push(a.name);
       existingNames.add(a.name);
     }
@@ -259,6 +260,19 @@ app.post('/api/accounts/bulk-delete', auth.requireBusinessAccess(), auth.require
 });
 
 function businessIdForAccount(req) { return db.prepare('SELECT business_id FROM accounts WHERE id = ?').get(req.params.id)?.business_id; }
+
+app.patch('/api/accounts/:id', auth.requireBusinessAccess(businessIdForAccount), auth.requireWriteAccess, (req, res) => {
+  const { name, code, schedule_c_line } = req.body;
+  db.prepare(`
+    UPDATE accounts SET
+      name = COALESCE(?, name),
+      code = CASE WHEN ? THEN ? ELSE code END,
+      schedule_c_line = COALESCE(?, schedule_c_line)
+    WHERE id = ?
+  `).run(name || null, code !== undefined ? 1 : 0, code || null, schedule_c_line || null, req.params.id);
+  res.json(db.prepare('SELECT * FROM accounts WHERE id = ?').get(req.params.id));
+});
+
 app.delete('/api/accounts/:id', auth.requireBusinessAccess(businessIdForAccount), auth.requireWriteAccess, (req, res) => {
   db.prepare('UPDATE accounts SET is_active = 0 WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
@@ -487,6 +501,58 @@ app.post('/api/reconciliation/unlock', auth.requireBusinessAccess(), auth.requir
   if (!statement_id) return res.status(400).json({ error: 'statement_id required' });
   db.prepare(`UPDATE reconciliation_periods SET is_locked = 0 WHERE statement_id = ?`).run(statement_id);
   res.json({ ok: true });
+});
+
+// List of past reconciliation lock events for this business — the "history".
+app.get('/api/reconciliation/periods', auth.requireBusinessAccess(), (req, res) => {
+  const { business_id } = req.query;
+  const periods = db.prepare(`
+    SELECT rp.*, s.source_name
+    FROM reconciliation_periods rp
+    LEFT JOIN statements s ON s.id = rp.statement_id
+    WHERE rp.business_id = ?
+    ORDER BY rp.locked_at DESC
+  `).all(business_id);
+  res.json(periods);
+});
+
+// Full reconciliation report: cleared transactions, uncleared ("discrepancy")
+// transactions, and the totals — used for both the on-screen report view and
+// the PDF export. Works whether the period is currently locked or still open.
+function buildReconciliationReport(statement_id) {
+  const statement = db.prepare('SELECT * FROM statements WHERE id = ?').get(statement_id);
+  const allTxns = db.prepare('SELECT t.*, a.name AS account_name FROM transactions t LEFT JOIN accounts a ON a.id = t.account_id WHERE t.statement_id = ? ORDER BY t.date').all(statement_id);
+  const cleared = allTxns.filter(t => t.is_reconciled);
+  const uncleared = allTxns.filter(t => !t.is_reconciled);
+  const clearedTotal = cleared.reduce((s, t) => s + t.amount, 0);
+  const beginningBalance = statement.statement_beginning_balance;
+  const endingBalance = statement.statement_ending_balance;
+  const hasBalances = beginningBalance !== null && endingBalance !== null;
+  const difference = hasBalances ? Math.round(((endingBalance - beginningBalance) - clearedTotal) * 100) / 100 : null;
+  const lockedPeriod = db.prepare('SELECT * FROM reconciliation_periods WHERE statement_id = ? ORDER BY locked_at DESC LIMIT 1').get(statement_id);
+
+  return {
+    statement, cleared, uncleared, cleared_total: clearedTotal,
+    uncleared_total: uncleared.reduce((s, t) => s + t.amount, 0),
+    beginning_balance: beginningBalance, ending_balance: endingBalance,
+    difference, is_balanced: difference !== null && Math.abs(difference) < 0.005,
+    locked_at: lockedPeriod ? lockedPeriod.locked_at : null,
+    is_locked: !!(lockedPeriod && lockedPeriod.is_locked),
+  };
+}
+
+app.get('/api/reconciliation/report', auth.requireBusinessAccess(), (req, res) => {
+  const { statement_id } = req.query;
+  if (!statement_id) return res.status(400).json({ error: 'statement_id required' });
+  res.json(buildReconciliationReport(statement_id));
+});
+
+app.get('/api/reconciliation/report/pdf', auth.requireBusinessAccess(), (req, res) => {
+  const { business_id, statement_id } = req.query;
+  if (!statement_id) return res.status(400).json({ error: 'statement_id required' });
+  const business = db.prepare('SELECT * FROM businesses WHERE id = ?').get(business_id);
+  const report = buildReconciliationReport(statement_id);
+  renderReconciliationReportPdf(res, { business, report });
 });
 
 app.get('/api/statements', auth.requireBusinessAccess(), (req, res) => {
@@ -804,7 +870,258 @@ app.get('/api/reports/ar-aging', auth.requireBusinessAccess(), (req, res) => {
   res.json({ buckets, detail, total_outstanding: detail.reduce((s, d) => s + d.balance_due, 0) });
 });
 
-// PDF and email delivery for a single invoice
+// ---------- Vendors & Bills (Accounts Payable) ----------
+app.get('/api/vendors', auth.requireBusinessAccess(), (req, res) => {
+  const { business_id } = req.query;
+  res.json(db.prepare('SELECT * FROM vendors WHERE business_id = ? ORDER BY name').all(business_id));
+});
+
+app.post('/api/vendors', auth.requireBusinessAccess(), auth.requireWriteAccess, (req, res) => {
+  const { business_id, name, email, address, notes } = req.body;
+  if (!name) return res.status(400).json({ error: 'name required' });
+  const id = uuid();
+  db.prepare('INSERT INTO vendors (id, business_id, name, email, address, notes) VALUES (?,?,?,?,?,?)')
+    .run(id, business_id, name, email || null, address || null, notes || null);
+  res.json(db.prepare('SELECT * FROM vendors WHERE id = ?').get(id));
+});
+
+function businessIdForVendor(req) { return db.prepare('SELECT business_id FROM vendors WHERE id = ?').get(req.params.id)?.business_id; }
+app.delete('/api/vendors/:id', auth.requireBusinessAccess(businessIdForVendor), auth.requireWriteAccess, (req, res) => {
+  db.prepare('DELETE FROM vendors WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+function billTotal(billId) {
+  const items = db.prepare('SELECT * FROM bill_line_items WHERE bill_id = ?').all(billId);
+  return items.reduce((sum, i) => sum + i.quantity * i.rate, 0);
+}
+function billPaid(billId) {
+  const payments = db.prepare('SELECT * FROM bill_payments WHERE bill_id = ?').all(billId);
+  return payments.reduce((sum, p) => sum + p.amount, 0);
+}
+function nextBillNumber(businessId) {
+  const count = db.prepare('SELECT COUNT(*) AS c FROM bills WHERE business_id = ?').get(businessId).c;
+  return String(2001 + count);
+}
+function hydrateBill(bill) {
+  const line_items = db.prepare('SELECT * FROM bill_line_items WHERE bill_id = ? ORDER BY sort_order').all(bill.id);
+  const payments = db.prepare('SELECT * FROM bill_payments WHERE bill_id = ? ORDER BY date').all(bill.id);
+  const vendor = db.prepare('SELECT * FROM vendors WHERE id = ?').get(bill.vendor_id);
+  const total = line_items.reduce((s, i) => s + i.quantity * i.rate, 0);
+  const paid = payments.reduce((s, p) => s + p.amount, 0);
+  return { ...bill, vendor, line_items, payments, total, balance_due: total - paid };
+}
+function markOverdueBills(businessId) {
+  const today = new Date().toISOString().slice(0, 10);
+  db.prepare(`
+    UPDATE bills SET status = 'overdue', updated_at = datetime('now')
+    WHERE business_id = ? AND status IN ('received','partial') AND due_date IS NOT NULL AND due_date < ?
+  `).run(businessId, today);
+}
+
+function businessIdForBill(req) { return db.prepare('SELECT business_id FROM bills WHERE id = ?').get(req.params.id)?.business_id; }
+
+app.get('/api/bills', auth.requireBusinessAccess(), (req, res) => {
+  const { business_id, status } = req.query;
+  markOverdueBills(business_id);
+  let query = 'SELECT * FROM bills WHERE business_id = ?';
+  const params = [business_id];
+  if (status) { query += ' AND status = ?'; params.push(status); }
+  query += ' ORDER BY issue_date DESC';
+  res.json(db.prepare(query).all(...params).map(hydrateBill));
+});
+
+app.get('/api/bills/:id', auth.requireBusinessAccess(businessIdForBill), (req, res) => {
+  const bill = db.prepare('SELECT * FROM bills WHERE id = ?').get(req.params.id);
+  if (!bill) return res.status(404).json({ error: 'not found' });
+  res.json(hydrateBill(bill));
+});
+
+app.post('/api/bills', auth.requireBusinessAccess(), auth.requireWriteAccess, (req, res) => {
+  const { business_id, vendor_id, issue_date, due_date, notes, expense_account_id, line_items } = req.body;
+  if (!vendor_id || !issue_date || !line_items || !line_items.length) {
+    return res.status(400).json({ error: 'vendor_id, issue_date, and at least one line item are required' });
+  }
+  const id = uuid();
+  const bill_number = nextBillNumber(business_id);
+
+  const createAll = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO bills (id, business_id, vendor_id, bill_number, issue_date, due_date, notes, expense_account_id, status)
+      VALUES (?,?,?,?,?,?,?,?,'received')
+    `).run(id, business_id, vendor_id, bill_number, issue_date, due_date || null, notes || null, expense_account_id || null);
+
+    const insertItem = db.prepare(`
+      INSERT INTO bill_line_items (id, bill_id, description, quantity, rate, sort_order)
+      VALUES (?,?,?,?,?,?)
+    `);
+    line_items.forEach((item, idx) => {
+      insertItem.run(uuid(), id, item.description, item.quantity || 1, item.rate || 0, idx);
+    });
+  });
+  createAll();
+
+  res.json(hydrateBill(db.prepare('SELECT * FROM bills WHERE id = ?').get(id)));
+});
+
+app.patch('/api/bills/:id', auth.requireBusinessAccess(businessIdForBill), auth.requireWriteAccess, (req, res) => {
+  const bill = db.prepare('SELECT * FROM bills WHERE id = ?').get(req.params.id);
+  if (!bill) return res.status(404).json({ error: 'not found' });
+  const { status, notes, due_date } = req.body;
+  db.prepare(`
+    UPDATE bills SET
+      status = COALESCE(?, status),
+      notes = COALESCE(?, notes),
+      due_date = COALESCE(?, due_date),
+      updated_at = datetime('now')
+    WHERE id = ?
+  `).run(status || null, notes || null, due_date || null, req.params.id);
+  res.json(hydrateBill(db.prepare('SELECT * FROM bills WHERE id = ?').get(req.params.id)));
+});
+
+app.delete('/api/bills/:id', auth.requireBusinessAccess(businessIdForBill), auth.requireWriteAccess, (req, res) => {
+  const del = db.transaction(() => {
+    db.prepare('DELETE FROM bill_payments WHERE bill_id = ?').run(req.params.id);
+    db.prepare('DELETE FROM bill_line_items WHERE bill_id = ?').run(req.params.id);
+    db.prepare('DELETE FROM bills WHERE id = ?').run(req.params.id);
+  });
+  del();
+  res.json({ ok: true });
+});
+
+// Record a payment against a bill (i.e. "Pay Bill"). Optionally posts a matching
+// transaction to the ledger so paying a bill flows into the books with no
+// double entry — mirrors how invoice payments post to Client Revenue.
+app.post('/api/bills/:id/payments', auth.requireBusinessAccess(businessIdForBill), auth.requireWriteAccess, (req, res) => {
+  const bill = db.prepare('SELECT * FROM bills WHERE id = ?').get(req.params.id);
+  if (!bill) return res.status(404).json({ error: 'not found' });
+  const { date, amount, method, post_to_ledger } = req.body;
+  if (!date || !amount) return res.status(400).json({ error: 'date and amount required' });
+
+  const vendor = db.prepare('SELECT * FROM vendors WHERE id = ?').get(bill.vendor_id);
+  let transactionId = null;
+
+  const run = db.transaction(() => {
+    if (post_to_ledger) {
+      let accountId = bill.expense_account_id;
+      if (!accountId) {
+        const acct = db.prepare(`SELECT id FROM accounts WHERE business_id = ? AND name = 'Accounts Payable'`).get(bill.business_id);
+        accountId = acct ? acct.id : null;
+      }
+      transactionId = uuid();
+      db.prepare(`
+        INSERT INTO transactions (id, business_id, date, description, amount, account_id, notes)
+        VALUES (?,?,?,?,?,?,?)
+      `).run(transactionId, bill.business_id, date, `Bill ${bill.bill_number} payment - ${vendor ? vendor.name : ''}`, -Math.abs(amount), accountId, `Payment for bill ${bill.bill_number}`);
+    }
+
+    db.prepare(`
+      INSERT INTO bill_payments (id, bill_id, date, amount, method, transaction_id)
+      VALUES (?,?,?,?,?,?)
+    `).run(uuid(), req.params.id, date, amount, method || null, transactionId);
+
+    const total = billTotal(req.params.id);
+    const paid = billPaid(req.params.id);
+    const newStatus = paid >= total ? 'paid' : (paid > 0 ? 'partial' : bill.status);
+    db.prepare(`UPDATE bills SET status = ?, updated_at = datetime('now') WHERE id = ?`).run(newStatus, req.params.id);
+  });
+  run();
+
+  res.json(hydrateBill(db.prepare('SELECT * FROM bills WHERE id = ?').get(req.params.id)));
+});
+
+app.get('/api/reports/ap-aging', auth.requireBusinessAccess(), (req, res) => {
+  const { business_id } = req.query;
+  markOverdueBills(business_id);
+  const bills = db.prepare(`SELECT * FROM bills WHERE business_id = ? AND status NOT IN ('paid','void','draft')`).all(business_id)
+    .map(hydrateBill)
+    .filter(b => b.balance_due > 0.001);
+
+  const today = new Date();
+  const buckets = { current: 0, '1-30': 0, '31-60': 0, '61-90': 0, '90+': 0 };
+  const detail = bills.map(b => {
+    const due = b.due_date ? new Date(b.due_date) : null;
+    const daysOverdue = due ? Math.floor((today - due) / 86400000) : 0;
+    let bucket = 'current';
+    if (daysOverdue > 90) bucket = '90+';
+    else if (daysOverdue > 60) bucket = '61-90';
+    else if (daysOverdue > 30) bucket = '31-60';
+    else if (daysOverdue > 0) bucket = '1-30';
+    buckets[bucket] += b.balance_due;
+    return { bill_number: b.bill_number, vendor_name: b.vendor ? b.vendor.name : '', balance_due: b.balance_due, due_date: b.due_date, bucket };
+  });
+
+  res.json({ buckets, detail, total_outstanding: detail.reduce((s, d) => s + d.balance_due, 0) });
+});
+
+// ---------- Journal Entries ----------
+function hydrateJournalEntry(je) {
+  const lines = db.prepare(`
+    SELECT t.*, a.name AS account_name, a.type AS account_type
+    FROM transactions t LEFT JOIN accounts a ON a.id = t.account_id
+    WHERE t.journal_entry_id = ? ORDER BY t.created_at
+  `).all(je.id);
+  return { ...je, lines, total_debits: lines.filter(l => l.amount > 0).reduce((s, l) => s + l.amount, 0) };
+}
+function businessIdForJournalEntry(req) { return db.prepare('SELECT business_id FROM journal_entries WHERE id = ?').get(req.params.id)?.business_id; }
+
+app.get('/api/journal-entries', auth.requireBusinessAccess(), (req, res) => {
+  const { business_id } = req.query;
+  const entries = db.prepare('SELECT * FROM journal_entries WHERE business_id = ? ORDER BY date DESC, created_at DESC').all(business_id);
+  res.json(entries.map(hydrateJournalEntry));
+});
+
+app.get('/api/journal-entries/:id', auth.requireBusinessAccess(businessIdForJournalEntry), (req, res) => {
+  const je = db.prepare('SELECT * FROM journal_entries WHERE id = ?').get(req.params.id);
+  if (!je) return res.status(404).json({ error: 'not found' });
+  res.json(hydrateJournalEntry(je));
+});
+
+// A journal entry is a set of lines, each posting a signed amount to an
+// account, that must net to zero (every debit has a matching credit) — the
+// standard double-entry check. Each line becomes its own transaction row,
+// linked by journal_entry_id, with no statement (it's a manual entry).
+app.post('/api/journal-entries', auth.requireBusinessAccess(), auth.requireWriteAccess, (req, res) => {
+  const { business_id, date, memo, lines } = req.body;
+  if (!date || !Array.isArray(lines) || lines.length < 2) {
+    return res.status(400).json({ error: 'date and at least two lines are required' });
+  }
+  const netTotal = lines.reduce((s, l) => s + Number(l.amount || 0), 0);
+  if (Math.abs(netTotal) >= 0.005) {
+    return res.status(400).json({ error: `Entry does not balance — lines net to ${netTotal.toFixed(2)}, must be 0.00` });
+  }
+  for (const l of lines) {
+    if (!l.account_id || l.amount === undefined || l.amount === null || l.amount === 0) {
+      return res.status(400).json({ error: 'Every line needs an account and a non-zero amount' });
+    }
+  }
+
+  const id = uuid();
+  const run = db.transaction(() => {
+    db.prepare('INSERT INTO journal_entries (id, business_id, date, memo) VALUES (?,?,?,?)').run(id, business_id, date, memo || null);
+    const insertTx = db.prepare(`
+      INSERT INTO transactions (id, business_id, date, description, amount, account_id, journal_entry_id, is_reconciled)
+      VALUES (?,?,?,?,?,?,?,1)
+    `);
+    lines.forEach(l => {
+      insertTx.run(uuid(), business_id, date, memo || 'Journal entry', Number(l.amount), l.account_id, id);
+    });
+  });
+  run();
+
+  res.json(hydrateJournalEntry(db.prepare('SELECT * FROM journal_entries WHERE id = ?').get(id)));
+});
+
+app.delete('/api/journal-entries/:id', auth.requireBusinessAccess(businessIdForJournalEntry), auth.requireWriteAccess, (req, res) => {
+  const del = db.transaction(() => {
+    db.prepare('DELETE FROM transactions WHERE journal_entry_id = ?').run(req.params.id);
+    db.prepare('DELETE FROM journal_entries WHERE id = ?').run(req.params.id);
+  });
+  del();
+  res.json({ ok: true });
+});
+
+
 app.get('/api/invoices/:id/pdf', auth.requireBusinessAccess(businessIdForInvoice), (req, res) => {
   const inv = hydrateInvoice(db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id));
   if (!inv) return res.status(404).json({ error: 'not found' });

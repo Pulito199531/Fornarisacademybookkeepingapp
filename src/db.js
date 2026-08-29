@@ -151,6 +151,58 @@ CREATE TABLE IF NOT EXISTS business_members (
   created_at TEXT DEFAULT (datetime('now')),
   UNIQUE(business_id, user_id)
 );
+
+CREATE TABLE IF NOT EXISTS vendors (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id),
+  name TEXT NOT NULL,
+  email TEXT,
+  address TEXT,
+  notes TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS bills (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id),
+  vendor_id TEXT NOT NULL REFERENCES vendors(id),
+  bill_number TEXT NOT NULL,
+  issue_date TEXT NOT NULL,
+  due_date TEXT,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','received','partial','paid','overdue','void')),
+  notes TEXT,
+  expense_account_id TEXT REFERENCES accounts(id),
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(business_id, bill_number)
+);
+
+CREATE TABLE IF NOT EXISTS bill_line_items (
+  id TEXT PRIMARY KEY,
+  bill_id TEXT NOT NULL REFERENCES bills(id),
+  description TEXT NOT NULL,
+  quantity REAL NOT NULL DEFAULT 1,
+  rate REAL NOT NULL DEFAULT 0,
+  sort_order INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS bill_payments (
+  id TEXT PRIMARY KEY,
+  bill_id TEXT NOT NULL REFERENCES bills(id),
+  date TEXT NOT NULL,
+  amount REAL NOT NULL,
+  method TEXT,
+  transaction_id TEXT REFERENCES transactions(id),
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS journal_entries (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id),
+  date TEXT NOT NULL,
+  memo TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
 `);
 
 // --- lightweight migrations for columns added after initial release ---
@@ -163,5 +215,6 @@ function ensureColumn(table, column, ddl) {
 ensureColumn('businesses', 'filing_status', 'filing_status TEXT');
 ensureColumn('businesses', 'state', 'state TEXT');
 ensureColumn('statements', 'statement_beginning_balance', 'statement_beginning_balance REAL');
+ensureColumn('transactions', 'journal_entry_id', 'journal_entry_id TEXT REFERENCES journal_entries(id)');
 
 module.exports = db;

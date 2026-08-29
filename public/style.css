@@ -348,6 +348,32 @@ button.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .recon-strip.match { background: var(--ledger-green-tint); color: var(--ledger-green-dark); }
 .recon-strip.mismatch { background: var(--brick-tint); color: var(--brick); }
+tr.uncleared-row { background: var(--brick-tint); }
+tr.uncleared-row:hover { background: var(--brick-tint); }
+
+.shortcut-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+}
+.shortcut-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  border-radius: 6px;
+  padding: 14px 8px;
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--ink);
+  text-align: center;
+}
+.shortcut-btn:hover { border-color: var(--ledger-green); background: var(--ledger-green-tint); }
+.shortcut-icon { font-size: 22px; }
 
 /* ---------- General Ledger ---------- */
 .gl-account-block { margin-bottom: 22px; }
