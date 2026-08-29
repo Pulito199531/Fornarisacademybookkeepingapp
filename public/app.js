@@ -223,6 +223,10 @@ const ES = {
   "Cash basis: income and expenses count when money actually moves — creating an invoice or bill does nothing until it's paid. Accrual basis: income and expenses count as soon as you invoice a client or receive a bill, whether or not it's been paid yet, and Accounts Receivable / Accounts Payable track what's still owed.": "Base de efectivo: los ingresos y gastos cuentan cuando el dinero realmente se mueve — crear una factura o cuenta no hace nada hasta que se pague. Base devengada: los ingresos y gastos cuentan tan pronto facturas a un cliente o recibes una cuenta, se haya pagado o no, y las Cuentas por Cobrar / Pagar rastrean lo que aún se debe.",
   "Method": "Método", "Cash basis": "Base de efectivo", "Accrual basis": "Base devengada",
   "Accounting method updated": "Método contable actualizado",
+  "Outstanding Invoices": "Facturas Pendientes", "Outstanding Bills": "Cuentas Pendientes",
+  "Revenue and Expenses": "Ingresos y Gastos", "Net Profit Trend": "Tendencia de Ganancia Neta",
+  "Revenue by Client": "Ingresos por Cliente", "Create an invoice to see this.": "Crea una factura para ver esto.",
+  "Spending by Category": "Gastos por Categoría", "No expenses recorded yet.": "Aún no hay gastos registrados.",
 };
 
 let currentLang = state.lang;
@@ -459,12 +463,29 @@ function render() {
 }
 
 // ---------- Dashboard ----------
+let dashboardCharts = [];
+function destroyDashboardCharts() {
+  dashboardCharts.forEach(c => c.destroy());
+  dashboardCharts = [];
+}
+
 async function renderDashboard() {
   main.innerHTML = `<h1 class="page-title">${t('Dashboard')}</h1><p class="page-sub">${t('Loading…')}</p>`;
-  const pl = await api(`/reports/pl?business_id=${state.currentBusinessId}`);
-  const txns = await api(`/transactions?business_id=${state.currentBusinessId}`);
+  const [pl, txns, monthly, revenueByClient, spending, arAging, apAging] = await Promise.all([
+    api(`/reports/pl?business_id=${state.currentBusinessId}`),
+    api(`/transactions?business_id=${state.currentBusinessId}`),
+    api(`/reports/monthly-summary?business_id=${state.currentBusinessId}&months=6`),
+    api(`/reports/revenue-by-client?business_id=${state.currentBusinessId}`),
+    api(`/reports/spending-by-category?business_id=${state.currentBusinessId}`),
+    api(`/reports/ar-aging?business_id=${state.currentBusinessId}`),
+    api(`/reports/ap-aging?business_id=${state.currentBusinessId}`),
+  ]);
   const unreconciled = txns.filter(t => !t.is_reconciled).length;
   const uncategorized = txns.filter(t => t.account_name === 'Uncategorized').length;
+  const monthLabels = monthly.map(m => {
+    const [y, mo] = m.month.split('-');
+    return new Date(y, mo - 1, 1).toLocaleDateString(currentLang === 'es' ? 'es' : 'en', { month: 'short' });
+  });
 
   main.innerHTML = `
     <h1 class="page-title">${t('Dashboard')}</h1>
@@ -495,18 +516,100 @@ async function renderDashboard() {
 
     <div class="card-row">
       <div class="card">
+        <h2>${t('Outstanding Invoices')}</h2>
+        <div class="stat negative"><div class="label">${t('Total unpaid')}</div><div class="value">${fmt(arAging.total_outstanding)}</div></div>
+      </div>
+      <div class="card">
+        <h2>${t('Outstanding Bills')}</h2>
+        <div class="stat negative"><div class="label">${t('Total owed')}</div><div class="value">${fmt(apAging.total_outstanding)}</div></div>
+      </div>
+      <div class="card">
         <h2>${t('Needs attention')}</h2>
         <div class="pl-line"><span>${t('Unreconciled transactions')}</span><span class="amt">${unreconciled}</span></div>
         <div class="pl-line"><span>${t('Uncategorized transactions')}</span><span class="amt">${uncategorized}</span></div>
-        <div class="pl-line"><span>${t('Statements imported')}</span><span class="amt">${state.statements.length}</span></div>
-      </div>
-      <div class="card">
-        <h2>${t('Quick start')}</h2>
-        <p style="color:var(--ink-soft); font-size:13px;">${t('Paste a bank statement to get transactions auto-categorized, then review and reconcile.')}</p>
-        <button class="btn" onclick="state.tab='import'; document.querySelector('[data-tab=import]').click()">${t('Import a statement')}</button>
       </div>
     </div>
+
+    <div class="card">
+      <h2>${t('Revenue and Expenses')}</h2>
+      <div style="height:260px;"><canvas id="revExpChart"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h2>${t('Net Profit Trend')}</h2>
+      <div style="height:220px;"><canvas id="profitTrendChart"></canvas></div>
+    </div>
+
+    <div class="card-row">
+      <div class="card">
+        <h2>${t('Revenue by Client')}</h2>
+        ${revenueByClient.length ? `<div style="height:220px;"><canvas id="revByClientChart"></canvas></div>` : `<p style="color:var(--ink-soft); font-size:13px;">${t('Create an invoice to see this.')}</p>`}
+      </div>
+      <div class="card">
+        <h2>${t('Spending by Category')}</h2>
+        ${spending.length ? `<div style="height:220px;"><canvas id="spendingChart"></canvas></div>` : `<p style="color:var(--ink-soft); font-size:13px;">${t('No expenses recorded yet.')}</p>`}
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>${t('Quick start')}</h2>
+      <p style="color:var(--ink-soft); font-size:13px;">${t('Paste a bank statement to get transactions auto-categorized, then review and reconcile.')}</p>
+      <button class="btn" onclick="state.tab='import'; document.querySelector('[data-tab=import]').click()">${t('Import a statement')}</button>
+    </div>
   `;
+
+  destroyDashboardCharts();
+  const palette = ['#2F5D50', '#C98A3B', '#7C9885', '#A23B2E', '#5B7A99', '#9B7EAD', '#C4A35A'];
+
+  // Chart.js loads from a CDN — if it's blocked (ad blocker, offline, etc.)
+  // the rest of the dashboard should still work fine without it.
+  if (typeof Chart === 'undefined') return;
+  try {
+    dashboardCharts.push(new Chart($('#revExpChart'), {
+      type: 'bar',
+      data: {
+        labels: monthLabels,
+        datasets: [
+          { label: t('Income'), data: monthly.map(m => m.income), backgroundColor: '#2F5D50' },
+          { label: t('Expenses'), data: monthly.map(m => m.expense), backgroundColor: '#A23B2E' },
+        ],
+      },
+      options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } },
+    }));
+
+    dashboardCharts.push(new Chart($('#profitTrendChart'), {
+      type: 'line',
+      data: {
+        labels: monthLabels,
+        datasets: [{ label: t('Net Profit'), data: monthly.map(m => m.net_profit), borderColor: '#2F5D50', backgroundColor: 'rgba(47,93,80,0.15)', fill: true, tension: 0.3 }],
+      },
+      options: { responsive: true, maintainAspectRatio: false },
+    }));
+
+    if (revenueByClient.length) {
+      dashboardCharts.push(new Chart($('#revByClientChart'), {
+        type: 'pie',
+        data: {
+          labels: revenueByClient.map(r => r.client_name),
+          datasets: [{ data: revenueByClient.map(r => r.total), backgroundColor: palette }],
+        },
+        options: { responsive: true, maintainAspectRatio: false },
+      }));
+    }
+
+    if (spending.length) {
+      dashboardCharts.push(new Chart($('#spendingChart'), {
+        type: 'pie',
+        data: {
+          labels: spending.map(s => s.category),
+          datasets: [{ data: spending.map(s => s.total), backgroundColor: palette }],
+        },
+        options: { responsive: true, maintainAspectRatio: false },
+      }));
+    }
+  } catch (e) {
+    console.error('Chart rendering failed:', e);
+  }
 }
 
 // Dashboard shortcut handlers — jump to a tab and, for invoicing/bills, straight

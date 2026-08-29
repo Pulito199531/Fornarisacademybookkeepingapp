@@ -613,6 +613,66 @@ app.get('/api/reports/balance-sheet', auth.requireBusinessAccess(), (req, res) =
   res.json(computeBalanceSheet(business_id, as_of));
 });
 
+// Month-by-month income/expense/profit for the dashboard trend charts.
+app.get('/api/reports/monthly-summary', auth.requireBusinessAccess(), (req, res) => {
+  const { business_id, months } = req.query;
+  const monthCount = Math.min(parseInt(months) || 6, 24);
+
+  const rows = db.prepare(`
+    SELECT strftime('%Y-%m', t.date) AS month, a.type,
+           SUM(CASE WHEN a.type = 'income' THEN t.amount ELSE 0 END) AS income,
+           SUM(CASE WHEN a.type = 'expense' THEN -t.amount ELSE 0 END) AS expense
+    FROM transactions t JOIN accounts a ON a.id = t.account_id
+    WHERE t.business_id = ? AND a.type IN ('income','expense')
+    GROUP BY month
+    ORDER BY month
+  `).all(business_id);
+
+  const byMonth = new Map(rows.map(r => [r.month, { income: r.income || 0, expense: r.expense || 0 }]));
+
+  // Build the last N calendar months even if some have no data, so the chart
+  // always shows a consistent, evenly-spaced timeline.
+  const result = [];
+  const now = new Date();
+  for (let i = monthCount - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const data = byMonth.get(key) || { income: 0, expense: 0 };
+    result.push({ month: key, income: data.income, expense: data.expense, net_profit: data.income - data.expense });
+  }
+  res.json(result);
+});
+
+// Revenue by client — sums invoice totals (excluding drafts/void) per client,
+// for the dashboard pie chart of "who earns you the most."
+app.get('/api/reports/revenue-by-client', auth.requireBusinessAccess(), (req, res) => {
+  const { business_id } = req.query;
+  const invoices = db.prepare(`SELECT * FROM invoices WHERE business_id = ? AND status NOT IN ('draft','void')`).all(business_id);
+  const byClient = new Map();
+  for (const inv of invoices) {
+    const total = invoiceTotal(inv.id);
+    const client = db.prepare('SELECT name FROM clients WHERE id = ?').get(inv.client_id);
+    const name = client ? client.name : 'Unknown';
+    byClient.set(name, (byClient.get(name) || 0) + total);
+  }
+  const result = [...byClient.entries()].map(([client_name, total]) => ({ client_name, total })).sort((a, b) => b.total - a.total);
+  res.json(result);
+});
+
+// Spending by expense category, for the dashboard "where's your money going" pie.
+app.get('/api/reports/spending-by-category', auth.requireBusinessAccess(), (req, res) => {
+  const { business_id } = req.query;
+  const rows = db.prepare(`
+    SELECT a.name AS category, SUM(-t.amount) AS total
+    FROM transactions t JOIN accounts a ON a.id = t.account_id
+    WHERE t.business_id = ? AND a.type = 'expense'
+    GROUP BY a.name
+    HAVING total > 0
+    ORDER BY total DESC
+  `).all(business_id);
+  res.json(rows);
+});
+
 function periodLabelFor(start, end, as_of) {
   if (start && end) return `${start} – ${end}`;
   if (as_of) return `As of ${as_of}`;
