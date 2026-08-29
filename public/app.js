@@ -561,54 +561,61 @@ async function renderDashboard() {
   destroyDashboardCharts();
   const palette = ['#2F5D50', '#C98A3B', '#7C9885', '#A23B2E', '#5B7A99', '#9B7EAD', '#C4A35A'];
 
-  // Chart.js loads from a CDN — if it's blocked (ad blocker, offline, etc.)
-  // the rest of the dashboard should still work fine without it.
+  // Chart.js is self-hosted (public/vendor/chart.umd.js) so it always loads
+  // with the app — but each chart still gets its own try/catch, so a problem
+  // with one chart never silently prevents the others from rendering.
   if (typeof Chart === 'undefined') return;
-  try {
-    dashboardCharts.push(new Chart($('#revExpChart'), {
-      type: 'bar',
-      data: {
-        labels: monthLabels,
-        datasets: [
-          { label: t('Income'), data: monthly.map(m => m.income), backgroundColor: '#2F5D50' },
-          { label: t('Expenses'), data: monthly.map(m => m.expense), backgroundColor: '#A23B2E' },
-        ],
-      },
-      options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } },
-    }));
+  function safeCreateChart(canvasId, config) {
+    try {
+      const el = $(canvasId);
+      if (!el) return;
+      dashboardCharts.push(new Chart(el, config));
+    } catch (e) {
+      console.error(`Chart ${canvasId} failed to render:`, e);
+    }
+  }
 
-    dashboardCharts.push(new Chart($('#profitTrendChart'), {
-      type: 'line',
+  safeCreateChart('#revExpChart', {
+    type: 'bar',
+    data: {
+      labels: monthLabels,
+      datasets: [
+        { label: t('Income'), data: monthly.map(m => m.income), backgroundColor: '#2F5D50' },
+        { label: t('Expenses'), data: monthly.map(m => m.expense), backgroundColor: '#A23B2E' },
+      ],
+    },
+    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } },
+  });
+
+  safeCreateChart('#profitTrendChart', {
+    type: 'line',
+    data: {
+      labels: monthLabels,
+      datasets: [{ label: t('Net Profit'), data: monthly.map(m => m.net_profit), borderColor: '#2F5D50', backgroundColor: 'rgba(47,93,80,0.15)', fill: true, tension: 0.3 }],
+    },
+    options: { responsive: true, maintainAspectRatio: false },
+  });
+
+  if (revenueByClient.length) {
+    safeCreateChart('#revByClientChart', {
+      type: 'pie',
       data: {
-        labels: monthLabels,
-        datasets: [{ label: t('Net Profit'), data: monthly.map(m => m.net_profit), borderColor: '#2F5D50', backgroundColor: 'rgba(47,93,80,0.15)', fill: true, tension: 0.3 }],
+        labels: revenueByClient.map(r => r.client_name),
+        datasets: [{ data: revenueByClient.map(r => r.total), backgroundColor: palette }],
       },
       options: { responsive: true, maintainAspectRatio: false },
-    }));
+    });
+  }
 
-    if (revenueByClient.length) {
-      dashboardCharts.push(new Chart($('#revByClientChart'), {
-        type: 'pie',
-        data: {
-          labels: revenueByClient.map(r => r.client_name),
-          datasets: [{ data: revenueByClient.map(r => r.total), backgroundColor: palette }],
-        },
-        options: { responsive: true, maintainAspectRatio: false },
-      }));
-    }
-
-    if (spending.length) {
-      dashboardCharts.push(new Chart($('#spendingChart'), {
-        type: 'pie',
-        data: {
-          labels: spending.map(s => s.category),
-          datasets: [{ data: spending.map(s => s.total), backgroundColor: palette }],
-        },
-        options: { responsive: true, maintainAspectRatio: false },
-      }));
-    }
-  } catch (e) {
-    console.error('Chart rendering failed:', e);
+  if (spending.length) {
+    safeCreateChart('#spendingChart', {
+      type: 'pie',
+      data: {
+        labels: spending.map(s => s.category),
+        datasets: [{ data: spending.map(s => s.total), backgroundColor: palette }],
+      },
+      options: { responsive: true, maintainAspectRatio: false },
+    });
   }
 }
 
