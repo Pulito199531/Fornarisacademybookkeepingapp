@@ -12,6 +12,8 @@ const { categorizeTransactions } = require('./categorize');
 const { calculateEstimate, quarterlyDueDates } = require('./taxEstimate');
 const plaid = require('./plaid');
 const { renderInvoicePdf, invoicePdfBuffer } = require('./invoicePdf');
+const { renderFinancialStatementsPdf, financialStatementsPdfBuffer } = require('./financialStatementsPdf');
+const { renderGeneralLedgerPdf } = require('./generalLedgerPdf');
 const email = require('./email');
 const auth = require('./auth');
 
@@ -493,9 +495,7 @@ app.get('/api/statements', auth.requireBusinessAccess(), (req, res) => {
 });
 
 // ---------- Reports ----------
-app.get('/api/reports/pl', auth.requireBusinessAccess(), (req, res) => {
-  const { business_id, start, end } = req.query;
-
+function computePL(business_id, start, end) {
   let query = `
     SELECT a.type, a.name AS account_name, SUM(t.amount) AS total
     FROM transactions t JOIN accounts a ON a.id = t.account_id
@@ -511,19 +511,10 @@ app.get('/api/reports/pl', auth.requireBusinessAccess(), (req, res) => {
   const expenses = rows.filter(r => r.type === 'expense');
   const totalIncome = income.reduce((s, r) => s + r.total, 0);
   const totalExpenses = expenses.reduce((s, r) => s + Math.abs(r.total), 0);
+  return { income, expenses, total_income: totalIncome, total_expenses: totalExpenses, net_profit: totalIncome - totalExpenses };
+}
 
-  res.json({
-    income,
-    expenses,
-    total_income: totalIncome,
-    total_expenses: totalExpenses,
-    net_profit: totalIncome - totalExpenses,
-  });
-});
-
-app.get('/api/reports/balance-sheet', auth.requireBusinessAccess(), (req, res) => {
-  const { business_id, as_of } = req.query;
-
+function computeBalanceSheet(business_id, as_of) {
   let query = `
     SELECT a.type, a.name AS account_name, SUM(t.amount) AS total
     FROM transactions t JOIN accounts a ON a.id = t.account_id
@@ -537,15 +528,101 @@ app.get('/api/reports/balance-sheet', auth.requireBusinessAccess(), (req, res) =
   const assets = rows.filter(r => r.type === 'asset');
   const liabilities = rows.filter(r => r.type === 'liability');
   const equity = rows.filter(r => r.type === 'equity');
-
-  res.json({
-    assets,
-    liabilities,
-    equity,
+  return {
+    assets, liabilities, equity,
     total_assets: assets.reduce((s, r) => s + r.total, 0),
     total_liabilities: liabilities.reduce((s, r) => s + r.total, 0),
     total_equity: equity.reduce((s, r) => s + r.total, 0),
-  });
+  };
+}
+
+app.get('/api/reports/pl', auth.requireBusinessAccess(), (req, res) => {
+  const { business_id, start, end } = req.query;
+  res.json(computePL(business_id, start, end));
+});
+
+app.get('/api/reports/balance-sheet', auth.requireBusinessAccess(), (req, res) => {
+  const { business_id, as_of } = req.query;
+  res.json(computeBalanceSheet(business_id, as_of));
+});
+
+function periodLabelFor(start, end, as_of) {
+  if (start && end) return `${start} – ${end}`;
+  if (as_of) return `As of ${as_of}`;
+  return 'All time';
+}
+
+function computeGeneralLedger(business_id, start, end) {
+  let query = `
+    SELECT a.id AS account_id, a.name AS account_name, a.type AS account_type,
+           t.id AS txn_id, t.date, t.description, t.amount
+    FROM accounts a
+    LEFT JOIN transactions t ON t.account_id = a.id AND t.business_id = a.business_id
+  `;
+  const conditions = ['a.business_id = ?', 'a.is_active = 1'];
+  const params = [business_id];
+  if (start) { conditions.push('(t.date IS NULL OR t.date >= ?)'); params.push(start); }
+  if (end) { conditions.push('(t.date IS NULL OR t.date <= ?)'); params.push(end); }
+  query += ' WHERE ' + conditions.join(' AND ') + ' ORDER BY a.type, a.name, t.date, t.created_at';
+
+  const rows = db.prepare(query).all(...params);
+  const byAccount = new Map();
+  for (const r of rows) {
+    if (!byAccount.has(r.account_id)) {
+      byAccount.set(r.account_id, { account_id: r.account_id, account_name: r.account_name, account_type: r.account_type, transactions: [], total: 0 });
+    }
+    const entry = byAccount.get(r.account_id);
+    if (r.txn_id) {
+      entry.total += r.amount;
+      entry.transactions.push({ id: r.txn_id, date: r.date, description: r.description, amount: r.amount, running_balance: entry.total });
+    }
+  }
+  return [...byAccount.values()];
+}
+
+app.get('/api/reports/general-ledger', auth.requireBusinessAccess(), (req, res) => {
+  const { business_id, start, end } = req.query;
+  res.json(computeGeneralLedger(business_id, start, end));
+});
+
+app.get('/api/reports/general-ledger/pdf', auth.requireBusinessAccess(), (req, res) => {
+  const { business_id, start, end } = req.query;
+  const business = db.prepare('SELECT * FROM businesses WHERE id = ?').get(business_id);
+  const ledger = computeGeneralLedger(business_id, start, end);
+  renderGeneralLedgerPdf(res, { business, ledger, periodLabel: periodLabelFor(start, end) });
+});
+
+app.get('/api/reports/financial-statements/pdf', auth.requireBusinessAccess(), (req, res) => {
+  const { business_id, start, end, as_of } = req.query;
+  const business = db.prepare('SELECT * FROM businesses WHERE id = ?').get(business_id);
+  const pl = computePL(business_id, start, end);
+  const bs = computeBalanceSheet(business_id, as_of || end);
+  renderFinancialStatementsPdf(res, { business, pl, bs, periodLabel: periodLabelFor(start, end, as_of) });
+});
+
+app.post('/api/reports/financial-statements/email', auth.requireBusinessAccess(), auth.requireWriteAccess, async (req, res) => {
+  if (!email.configured) return res.status(400).json({ error: 'Email is not configured. Add SMTP_HOST, SMTP_USER, and SMTP_PASS to .env.' });
+  const { business_id, to, start, end, as_of } = req.body;
+  if (!to) return res.status(400).json({ error: 'Recipient email required' });
+
+  const business = db.prepare('SELECT * FROM businesses WHERE id = ?').get(business_id);
+  const pl = computePL(business_id, start, end);
+  const bs = computeBalanceSheet(business_id, as_of || end);
+  const periodLabel = periodLabelFor(start, end, as_of);
+  const pdfBuffer = await financialStatementsPdfBuffer({ business, pl, bs, periodLabel });
+
+  try {
+    await email.sendInvoiceEmail({
+      to,
+      subject: `Financial Statements — ${business.name}`,
+      text: `Attached are the financial statements for ${business.name} (${periodLabel}).\n\nProfit & Loss net profit: $${pl.net_profit.toFixed(2)}\nBalance Sheet total assets: $${bs.total_assets.toFixed(2)}`,
+      pdfBuffer,
+      pdfFilename: `financial-statements-${business.name.replace(/[^a-z0-9]/gi, '-')}.pdf`,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------- Clients ----------

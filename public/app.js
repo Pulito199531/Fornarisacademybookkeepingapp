@@ -179,6 +179,15 @@ const ES = {
   "Unlock": "Desbloquear", "Finish now": "Finalizar ahora", "Balances saved": "Saldos guardados",
   "Finish reconciling this period? Checked transactions will be locked.": "¿Finalizar la conciliación de este período? Las transacciones marcadas se bloquearán.",
   "Period unlocked": "Período desbloqueado",
+  "+ Add new account…": "+ Agregar nueva cuenta…", "Add new account": "Agregar nueva cuenta",
+  "Cancel": "Cancelar", "Account added and applied": "Cuenta agregada y aplicada",
+  "Share these statements": "Compartir estos estados", "Email PDF": "Enviar PDF por correo",
+  "Email address to send the financial statements to:": "Correo electrónico al que enviar los estados financieros:",
+  "Financial statements emailed": "Estados financieros enviados por correo",
+  "General Ledger": "Libro Mayor",
+  "Every account with its transactions in order and a running balance — scroll to browse, or print/export a copy.": "Cada cuenta con sus transacciones en orden y un saldo acumulado — desplázate para explorar, o imprime/exporta una copia.",
+  "Print": "Imprimir", "No transactions yet.": "Aún no hay transacciones.",
+  "Ending balance": "Saldo final",
 };
 
 let currentLang = state.lang;
@@ -404,6 +413,7 @@ function render() {
     transactions: renderTransactions,
     reconciliation: renderReconciliation,
     reports: renderReports,
+    generalLedger: renderGeneralLedger,
     taxes: renderTaxes,
     team: renderTeam,
   };
@@ -1248,7 +1258,8 @@ function accountOptionsGrouped(selectedId) {
     { type: 'asset', label: t('Assets') },
     { type: 'liability', label: t('Liabilities') },
   ];
-  return groups.map(g => {
+  const newOption = `<option value="__new__">${t('+ Add new account…')}</option>`;
+  return newOption + groups.map(g => {
     const accts = state.accounts.filter(a => a.type === g.type);
     if (!accts.length) return '';
     return `<optgroup label="${escapeHtml(g.label)}">
@@ -1264,13 +1275,85 @@ function accountSelectHtml(t) {
   </select>`;
 }
 
+// Small inline modal for creating a new GL account without leaving the
+// transaction list — used by the "+ Add new account…" option in every
+// category dropdown. Calls onCreated(newAccount) on success, onCancel() if
+// the user backs out (so the dropdown can revert to its previous value).
+function openQuickAddAccountModal(onCreated, onCancel) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.4); display:flex; align-items:center; justify-content:center; z-index:1000;';
+  overlay.innerHTML = `
+    <div class="card" style="width:360px; margin:0;">
+      <h2>${t('Add new account')}</h2>
+      <div class="field"><label class="field-label">${t('Name')}</label><input type="text" id="qaAcctName" placeholder="${t('e.g. Client Revenue')}"></div>
+      <div class="field">
+        <label class="field-label">${t('Type')}</label>
+        <select class="form-input" id="qaAcctType">
+          <option value="expense" selected>${t('Expense')}</option>
+          <option value="income">${t('Income ').trim()}</option>
+          <option value="equity">${t('Equity')}</option>
+          <option value="asset">${t('Asset')}</option>
+          <option value="liability">${t('Liability')}</option>
+        </select>
+      </div>
+      <div style="display:flex; gap:8px; margin-top:6px;">
+        <button class="btn" id="qaAcctSaveBtn">${t('Add')}</button>
+        <button class="btn secondary" id="qaAcctCancelBtn">${t('Cancel')}</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  document.getElementById('qaAcctName').focus();
+
+  const close = () => overlay.remove();
+  document.getElementById('qaAcctCancelBtn').onclick = () => { close(); if (onCancel) onCancel(); };
+  overlay.onclick = (e) => { if (e.target === overlay) { close(); if (onCancel) onCancel(); } };
+
+  document.getElementById('qaAcctSaveBtn').onclick = async () => {
+    const name = document.getElementById('qaAcctName').value.trim();
+    const type = document.getElementById('qaAcctType').value;
+    if (!name) return toast(t('Enter an account name'), true);
+    try {
+      const newAccount = await api('/accounts', { method: 'POST', body: JSON.stringify({ business_id: state.currentBusinessId, name, type }) });
+      state.accounts = await api('/accounts?business_id=' + state.currentBusinessId);
+      close();
+      onCreated(newAccount);
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
 function bindAccountSelects() {
   document.querySelectorAll('.account-select').forEach(sel => {
+    // Track the last real (non-"__new__") value so we can revert on cancel.
+    if (!sel.dataset.lastValue) sel.dataset.lastValue = sel.value;
+
     sel.onchange = async () => {
+      if (sel.value === '__new__') {
+        openQuickAddAccountModal(
+          async (newAccount) => {
+            // Refresh every account dropdown on the page so the new account
+            // appears everywhere, not just in the one that triggered this.
+            document.querySelectorAll('.account-select').forEach(otherSel => {
+              const current = otherSel === sel ? newAccount.id : otherSel.value;
+              otherSel.innerHTML = accountOptionsGrouped(current);
+              otherSel.dataset.lastValue = current;
+            });
+            try {
+              await api('/transactions/' + sel.dataset.txnId, { method: 'PATCH', body: JSON.stringify({ account_id: newAccount.id }) });
+              sel.classList.remove('ai-low', 'uncategorized');
+              toast(t('Account added and applied'));
+            } catch (e) { toast(e.message, true); }
+          },
+          () => { sel.value = sel.dataset.lastValue; }
+        );
+        return;
+      }
+
       try {
         await api('/transactions/' + sel.dataset.txnId, { method: 'PATCH', body: JSON.stringify({ account_id: sel.value }) });
         sel.classList.remove('ai-low', 'uncategorized');
-        toast('Category updated');
+        sel.dataset.lastValue = sel.value;
+        toast(t('Category updated'));
       } catch (e) { toast(e.message, true); }
     };
   });
@@ -1322,6 +1405,22 @@ async function renderTransactions() {
     </div>
   `;
   bindAccountSelects();
+
+  const manAccountSel = $('#manAccount');
+  manAccountSel.dataset.lastValue = manAccountSel.value;
+  manAccountSel.onchange = () => {
+    if (manAccountSel.value !== '__new__') { manAccountSel.dataset.lastValue = manAccountSel.value; return; }
+    openQuickAddAccountModal(
+      (newAccount) => {
+        document.querySelectorAll('.account-select, #manAccount').forEach(sel => {
+          const current = sel === manAccountSel ? newAccount.id : sel.value;
+          sel.innerHTML = accountOptionsGrouped(current);
+          sel.dataset.lastValue = current;
+        });
+      },
+      () => { manAccountSel.value = manAccountSel.dataset.lastValue; }
+    );
+  };
 
   $('#manAddBtn').onclick = async () => {
     const date = $('#manDate').value, description = $('#manDesc').value.trim(), amount = $('#manAmount').value;
@@ -1516,7 +1615,77 @@ async function renderReports() {
         <div class="pl-total"><span>${t('Total Assets')}</span><span>${fmt(bs.total_assets)}</span></div>
       </div>
     </div>
+
+    <div class="card">
+      <h2>${t('Share these statements')}</h2>
+      <div style="display:flex; gap:10px;">
+        <a class="btn secondary" style="text-decoration:none;" href="/api/reports/financial-statements/pdf?business_id=${state.currentBusinessId}" target="_blank">${t('Download PDF')}</a>
+        <button class="btn" id="emailStatementsBtn">${t('Email PDF')}</button>
+      </div>
+    </div>
   `;
+
+  $('#emailStatementsBtn').onclick = async () => {
+    const to = prompt(t("Email address to send the financial statements to:"));
+    if (!to) return;
+    try {
+      await api('/reports/financial-statements/email', { method: 'POST', body: JSON.stringify({ business_id: state.currentBusinessId, to }) });
+      toast(t('Financial statements emailed'));
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+// ---------- General Ledger ----------
+async function renderGeneralLedger() {
+  main.innerHTML = `<h1 class="page-title">${t('General Ledger')}</h1><p class="page-sub">${t('Loading…')}</p>`;
+  const ledger = await api(`/reports/general-ledger?business_id=${state.currentBusinessId}`);
+  const typeLabels = { asset: t('Assets'), liability: t('Liabilities'), equity: t('Equity'), income: t('Income ').trim(), expense: t('Expenses') };
+  const byType = { asset: [], liability: [], equity: [], income: [], expense: [] };
+  ledger.forEach(a => { if (a.transactions.length) byType[a.account_type].push(a); });
+  const anyTransactions = ledger.some(a => a.transactions.length);
+
+  main.innerHTML = `
+    <h1 class="page-title">${t('General Ledger')}</h1>
+    <p class="page-sub">${t('Every account with its transactions in order and a running balance — scroll to browse, or print/export a copy.')}</p>
+
+    <div class="card">
+      <div style="display:flex; gap:10px;">
+        <button class="btn secondary" id="printGlBtn">${t('Print')}</button>
+        <a class="btn secondary" style="text-decoration:none;" href="/api/reports/general-ledger/pdf?business_id=${state.currentBusinessId}" target="_blank">${t('Download PDF')}</a>
+      </div>
+    </div>
+
+    ${anyTransactions ? Object.keys(typeLabels).map(type => {
+      const accounts = byType[type];
+      if (!accounts.length) return '';
+      return `
+        <div class="card">
+          <h2>${typeLabels[type]}</h2>
+          ${accounts.map(acct => `
+            <div class="gl-account-block">
+              <h3>${escapeHtml(acct.account_name)}</h3>
+              <table class="ledger">
+                <thead><tr><th>${t('Date')}</th><th>${t('Description')}</th><th class="amount">${t('Amount')}</th><th class="amount">${t('Balance')}</th></tr></thead>
+                <tbody>
+                  ${acct.transactions.map(tx => `
+                    <tr>
+                      <td class="date">${tx.date}</td>
+                      <td>${escapeHtml(tx.description)}</td>
+                      <td class="amount ${tx.amount >= 0 ? 'positive' : 'negative'}">${fmt(tx.amount)}</td>
+                      <td class="amount">${fmt(tx.running_balance)}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+              <div class="gl-ending-balance"><span>${t('Ending balance')}</span><span>${fmt(acct.total)}</span></div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }).join('') : `<div class="empty-state"><div class="glyph">§</div>${t('No transactions yet.')}</div>`}
+  `;
+
+  $('#printGlBtn').onclick = () => window.print();
 }
 
 init();
