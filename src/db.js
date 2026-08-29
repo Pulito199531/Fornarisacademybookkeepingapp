@@ -216,5 +216,8 @@ ensureColumn('businesses', 'filing_status', 'filing_status TEXT');
 ensureColumn('businesses', 'state', 'state TEXT');
 ensureColumn('statements', 'statement_beginning_balance', 'statement_beginning_balance REAL');
 ensureColumn('transactions', 'journal_entry_id', 'journal_entry_id TEXT REFERENCES journal_entries(id)');
+ensureColumn('businesses', 'accounting_method', "accounting_method TEXT DEFAULT 'cash'");
+ensureColumn('transactions', 'invoice_id', 'invoice_id TEXT REFERENCES invoices(id)');
+ensureColumn('transactions', 'bill_id', 'bill_id TEXT REFERENCES bills(id)');
 
 module.exports = db;

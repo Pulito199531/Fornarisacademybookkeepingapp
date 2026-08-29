@@ -219,6 +219,10 @@ const ES = {
   "Add at least two lines": "Agrega al menos dos líneas", "Journal entry saved": "Asiento contable guardado",
   "Delete this journal entry? Both sides will be removed.": "¿Eliminar este asiento contable? Se eliminarán ambos lados.",
   "Journal entry deleted": "Asiento contable eliminado",
+  "Accounting method": "Método contable",
+  "Cash basis: income and expenses count when money actually moves — creating an invoice or bill does nothing until it's paid. Accrual basis: income and expenses count as soon as you invoice a client or receive a bill, whether or not it's been paid yet, and Accounts Receivable / Accounts Payable track what's still owed.": "Base de efectivo: los ingresos y gastos cuentan cuando el dinero realmente se mueve — crear una factura o cuenta no hace nada hasta que se pague. Base devengada: los ingresos y gastos cuentan tan pronto facturas a un cliente o recibes una cuenta, se haya pagado o no, y las Cuentas por Cobrar / Pagar rastrean lo que aún se debe.",
+  "Method": "Método", "Cash basis": "Base de efectivo", "Accrual basis": "Base devengada",
+  "Accounting method updated": "Método contable actualizado",
 };
 
 let currentLang = state.lang;
@@ -566,6 +570,18 @@ async function renderAccounts() {
     </div>
 
     <div class="card">
+      <h2>${t('Accounting method')}</h2>
+      <p style="font-size:12.5px; color:var(--ink-soft); margin-bottom:12px;">${t("Cash basis: income and expenses count when money actually moves — creating an invoice or bill does nothing until it's paid. Accrual basis: income and expenses count as soon as you invoice a client or receive a bill, whether or not it's been paid yet, and Accounts Receivable / Accounts Payable track what's still owed.")}</p>
+      <div class="field" style="max-width:280px;">
+        <label class="field-label">${t('Method')}</label>
+        <select class="form-input" id="accountingMethodSelect">
+          <option value="cash" ${(business.accounting_method || 'cash') === 'cash' ? 'selected' : ''}>${t('Cash basis')}</option>
+          <option value="accrual" ${business.accounting_method === 'accrual' ? 'selected' : ''}>${t('Accrual basis')}</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="card">
       <h2>${t('Add account')}</h2>
       <div class="field-row">
         <div class="field"><label class="field-label">${t('Name')}</label><input type="text" id="acctName" placeholder="${t('e.g. Client Revenue')}"></div>
@@ -654,6 +670,15 @@ async function renderAccounts() {
       toast(result.added.length ? `${t('Added')}: ${result.added.join(', ')}` : t('All accounts for this type already exist'));
       renderAccounts();
     } catch (e) { toast(e.message, true); }
+  };
+
+  $('#accountingMethodSelect').onchange = async (e) => {
+    try {
+      const updated = await api('/businesses/' + state.currentBusinessId, { method: 'PATCH', body: JSON.stringify({ accounting_method: e.target.value }) });
+      const idx = state.businesses.findIndex(b => b.id === state.currentBusinessId);
+      state.businesses[idx] = updated;
+      toast(t('Accounting method updated'));
+    } catch (err) { toast(err.message, true); }
   };
 
   $('#addAcctBtn').onclick = async () => {

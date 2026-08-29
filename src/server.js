@@ -107,16 +107,17 @@ app.post('/api/businesses', (req, res) => {
 function businessIdForBusinessParam(req) { return req.params.id; }
 
 app.patch('/api/businesses/:id', auth.requireBusinessAccess(businessIdForBusinessParam), auth.requireWriteAccess, (req, res) => {
-  const { name, entity_type, industry, filing_status, state } = req.body;
+  const { name, entity_type, industry, filing_status, state, accounting_method } = req.body;
   db.prepare(`
     UPDATE businesses SET
       name = COALESCE(?, name),
       entity_type = COALESCE(?, entity_type),
       industry = COALESCE(?, industry),
       filing_status = COALESCE(?, filing_status),
-      state = COALESCE(?, state)
+      state = COALESCE(?, state),
+      accounting_method = COALESCE(?, accounting_method)
     WHERE id = ?
-  `).run(name || null, entity_type || null, industry || null, filing_status || null, state || null, req.params.id);
+  `).run(name || null, entity_type || null, industry || null, filing_status || null, state || null, accounting_method || null, req.params.id);
   res.json(db.prepare('SELECT * FROM businesses WHERE id = ?').get(req.params.id));
 });
 
@@ -736,6 +737,23 @@ function hydrateInvoice(inv) {
 
 function businessIdForInvoice(req) { return db.prepare('SELECT business_id FROM invoices WHERE id = ?').get(req.params.id)?.business_id; }
 
+// Finds the account transactions should treat as "cash" — prefers an account
+// whose name looks like an actual bank account, falls back to the first asset.
+function findCashAccount(business_id) {
+  const named = db.prepare(`
+    SELECT id FROM accounts WHERE business_id = ? AND is_active = 1 AND type = 'asset'
+      AND (name LIKE '%check%' OR name LIKE '%cash%' OR name LIKE '%bank%')
+    ORDER BY name LIMIT 1
+  `).get(business_id);
+  if (named) return named.id;
+  const anyAsset = db.prepare(`SELECT id FROM accounts WHERE business_id = ? AND is_active = 1 AND type = 'asset' ORDER BY name LIMIT 1`).get(business_id);
+  return anyAsset ? anyAsset.id : null;
+}
+function findAccountByName(business_id, name) {
+  const row = db.prepare(`SELECT id FROM accounts WHERE business_id = ? AND is_active = 1 AND name = ?`).get(business_id, name);
+  return row ? row.id : null;
+}
+
 app.get('/api/invoices', auth.requireBusinessAccess(), (req, res) => {
   const { business_id, status } = req.query;
   markOverdueInvoices(business_id);
@@ -753,6 +771,11 @@ app.get('/api/invoices/:id', auth.requireBusinessAccess(businessIdForInvoice), (
   res.json(hydrateInvoice(inv));
 });
 
+// Creating an invoice is a real accounting event under accrual: revenue is
+// earned now, and the client owes it, so Accounts Receivable and the revenue
+// account both post immediately — this is what makes the Balance Sheet and
+// P&L reflect open invoices before any cash has changed hands. Under cash
+// basis, nothing posts here; revenue is recognized later, at payment time.
 app.post('/api/invoices', auth.requireBusinessAccess(), auth.requireWriteAccess, (req, res) => {
   const { business_id, client_id, issue_date, due_date, notes, revenue_account_id, line_items } = req.body;
   if (!client_id || !issue_date || !line_items || !line_items.length) {
@@ -760,6 +783,8 @@ app.post('/api/invoices', auth.requireBusinessAccess(), auth.requireWriteAccess,
   }
   const id = uuid();
   const invoice_number = nextInvoiceNumber(business_id);
+  const business = db.prepare('SELECT * FROM businesses WHERE id = ?').get(business_id);
+  const total = line_items.reduce((s, li) => s + (li.quantity || 1) * (li.rate || 0), 0);
 
   const createAll = db.transaction(() => {
     db.prepare(`
@@ -774,6 +799,19 @@ app.post('/api/invoices', auth.requireBusinessAccess(), auth.requireWriteAccess,
     line_items.forEach((item, idx) => {
       insertItem.run(uuid(), id, item.description, item.quantity || 1, item.rate || 0, idx);
     });
+
+    if (business.accounting_method === 'accrual' && total > 0) {
+      const arAccountId = findAccountByName(business_id, 'Accounts Receivable');
+      const revenueAccountId = revenue_account_id || findAccountByName(business_id, 'Client Revenue');
+      if (arAccountId && revenueAccountId) {
+        const insertTx = db.prepare(`
+          INSERT INTO transactions (id, business_id, date, description, amount, account_id, invoice_id, is_reconciled)
+          VALUES (?,?,?,?,?,?,?,1)
+        `);
+        insertTx.run(uuid(), business_id, issue_date, `Invoice ${invoice_number} issued`, total, arAccountId, id);
+        insertTx.run(uuid(), business_id, issue_date, `Invoice ${invoice_number} issued`, total, revenueAccountId, id);
+      }
+    }
   });
   createAll();
 
@@ -797,6 +835,7 @@ app.patch('/api/invoices/:id', auth.requireBusinessAccess(businessIdForInvoice),
 
 app.delete('/api/invoices/:id', auth.requireBusinessAccess(businessIdForInvoice), auth.requireWriteAccess, (req, res) => {
   const del = db.transaction(() => {
+    db.prepare('DELETE FROM transactions WHERE invoice_id = ?').run(req.params.id);
     db.prepare('DELETE FROM invoice_payments WHERE invoice_id = ?').run(req.params.id);
     db.prepare('DELETE FROM invoice_line_items WHERE invoice_id = ?').run(req.params.id);
     db.prepare('DELETE FROM invoices WHERE id = ?').run(req.params.id);
@@ -805,9 +844,11 @@ app.delete('/api/invoices/:id', auth.requireBusinessAccess(businessIdForInvoice)
   res.json({ ok: true });
 });
 
-// Record a payment against an invoice. Optionally posts a matching transaction
-// to the ledger (categorized to the invoice's revenue account, or Client Revenue by default)
-// so paid invoices flow straight into the P&L without double entry.
+// Recording a payment always increases cash — that money genuinely arrived.
+// What ELSE happens depends on the accounting method: under cash basis,
+// revenue is recognized right now (this is the first time it hits the P&L).
+// Under accrual, revenue was already recognized when the invoice was issued,
+// so payment just clears the receivable instead.
 app.post('/api/invoices/:id/payments', auth.requireBusinessAccess(businessIdForInvoice), auth.requireWriteAccess, (req, res) => {
   const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id);
   if (!inv) return res.status(404).json({ error: 'not found' });
@@ -815,20 +856,30 @@ app.post('/api/invoices/:id/payments', auth.requireBusinessAccess(businessIdForI
   if (!date || !amount) return res.status(400).json({ error: 'date and amount required' });
 
   const client = db.prepare('SELECT * FROM clients WHERE id = ?').get(inv.client_id);
+  const business = db.prepare('SELECT * FROM businesses WHERE id = ?').get(inv.business_id);
   let transactionId = null;
 
   const run = db.transaction(() => {
     if (post_to_ledger) {
-      let accountId = inv.revenue_account_id;
-      if (!accountId) {
-        const revAcct = db.prepare(`SELECT id FROM accounts WHERE business_id = ? AND name = 'Client Revenue'`).get(inv.business_id);
-        accountId = revAcct ? revAcct.id : null;
+      const cashAccountId = findCashAccount(inv.business_id);
+      const label = `Invoice ${inv.invoice_number} payment - ${client ? client.name : ''}`;
+      const insertTx = db.prepare(`
+        INSERT INTO transactions (id, business_id, date, description, amount, account_id, invoice_id, notes, is_reconciled)
+        VALUES (?,?,?,?,?,?,?,?,1)
+      `);
+
+      if (cashAccountId) {
+        transactionId = uuid();
+        insertTx.run(transactionId, inv.business_id, date, label, Math.abs(amount), cashAccountId, req.params.id, `Payment for invoice ${inv.invoice_number}`);
       }
-      transactionId = uuid();
-      db.prepare(`
-        INSERT INTO transactions (id, business_id, date, description, amount, account_id, notes)
-        VALUES (?,?,?,?,?,?,?)
-      `).run(transactionId, inv.business_id, date, `Invoice ${inv.invoice_number} payment - ${client ? client.name : ''}`, Math.abs(amount), accountId, `Payment for invoice ${inv.invoice_number}`);
+
+      if (business.accounting_method === 'accrual') {
+        const arAccountId = findAccountByName(inv.business_id, 'Accounts Receivable');
+        if (arAccountId) insertTx.run(uuid(), inv.business_id, date, label, -Math.abs(amount), arAccountId, req.params.id, `Payment for invoice ${inv.invoice_number}`);
+      } else {
+        let revenueAccountId = inv.revenue_account_id || findAccountByName(inv.business_id, 'Client Revenue');
+        if (revenueAccountId) insertTx.run(uuid(), inv.business_id, date, label, Math.abs(amount), revenueAccountId, req.params.id, `Payment for invoice ${inv.invoice_number}`);
+      }
     }
 
     db.prepare(`
@@ -937,6 +988,10 @@ app.get('/api/bills/:id', auth.requireBusinessAccess(businessIdForBill), (req, r
   res.json(hydrateBill(bill));
 });
 
+// Entering a bill is a real accounting event under accrual: the expense is
+// incurred now and you owe the vendor, so the expense account and Accounts
+// Payable both post immediately. Under cash basis, nothing posts here — the
+// expense is recognized later, when the bill is actually paid.
 app.post('/api/bills', auth.requireBusinessAccess(), auth.requireWriteAccess, (req, res) => {
   const { business_id, vendor_id, issue_date, due_date, notes, expense_account_id, line_items } = req.body;
   if (!vendor_id || !issue_date || !line_items || !line_items.length) {
@@ -944,6 +999,8 @@ app.post('/api/bills', auth.requireBusinessAccess(), auth.requireWriteAccess, (r
   }
   const id = uuid();
   const bill_number = nextBillNumber(business_id);
+  const business = db.prepare('SELECT * FROM businesses WHERE id = ?').get(business_id);
+  const total = line_items.reduce((s, li) => s + (li.quantity || 1) * (li.rate || 0), 0);
 
   const createAll = db.transaction(() => {
     db.prepare(`
@@ -958,6 +1015,19 @@ app.post('/api/bills', auth.requireBusinessAccess(), auth.requireWriteAccess, (r
     line_items.forEach((item, idx) => {
       insertItem.run(uuid(), id, item.description, item.quantity || 1, item.rate || 0, idx);
     });
+
+    if (business.accounting_method === 'accrual' && total > 0) {
+      const apAccountId = findAccountByName(business_id, 'Accounts Payable');
+      const expenseAccountId = expense_account_id || findAccountByName(business_id, 'Uncategorized');
+      if (apAccountId && expenseAccountId) {
+        const insertTx = db.prepare(`
+          INSERT INTO transactions (id, business_id, date, description, amount, account_id, bill_id, is_reconciled)
+          VALUES (?,?,?,?,?,?,?,1)
+        `);
+        insertTx.run(uuid(), business_id, issue_date, `Bill ${bill_number} received`, -total, expenseAccountId, id);
+        insertTx.run(uuid(), business_id, issue_date, `Bill ${bill_number} received`, total, apAccountId, id);
+      }
+    }
   });
   createAll();
 
@@ -981,6 +1051,7 @@ app.patch('/api/bills/:id', auth.requireBusinessAccess(businessIdForBill), auth.
 
 app.delete('/api/bills/:id', auth.requireBusinessAccess(businessIdForBill), auth.requireWriteAccess, (req, res) => {
   const del = db.transaction(() => {
+    db.prepare('DELETE FROM transactions WHERE bill_id = ?').run(req.params.id);
     db.prepare('DELETE FROM bill_payments WHERE bill_id = ?').run(req.params.id);
     db.prepare('DELETE FROM bill_line_items WHERE bill_id = ?').run(req.params.id);
     db.prepare('DELETE FROM bills WHERE id = ?').run(req.params.id);
@@ -989,9 +1060,10 @@ app.delete('/api/bills/:id', auth.requireBusinessAccess(businessIdForBill), auth
   res.json({ ok: true });
 });
 
-// Record a payment against a bill (i.e. "Pay Bill"). Optionally posts a matching
-// transaction to the ledger so paying a bill flows into the books with no
-// double entry — mirrors how invoice payments post to Client Revenue.
+// Paying a bill always decreases cash — that money genuinely left. Under cash
+// basis, the expense is recognized right now (first time it hits the P&L).
+// Under accrual, the expense was already recognized when the bill was
+// entered, so payment just clears the payable instead.
 app.post('/api/bills/:id/payments', auth.requireBusinessAccess(businessIdForBill), auth.requireWriteAccess, (req, res) => {
   const bill = db.prepare('SELECT * FROM bills WHERE id = ?').get(req.params.id);
   if (!bill) return res.status(404).json({ error: 'not found' });
@@ -999,20 +1071,30 @@ app.post('/api/bills/:id/payments', auth.requireBusinessAccess(businessIdForBill
   if (!date || !amount) return res.status(400).json({ error: 'date and amount required' });
 
   const vendor = db.prepare('SELECT * FROM vendors WHERE id = ?').get(bill.vendor_id);
+  const business = db.prepare('SELECT * FROM businesses WHERE id = ?').get(bill.business_id);
   let transactionId = null;
 
   const run = db.transaction(() => {
     if (post_to_ledger) {
-      let accountId = bill.expense_account_id;
-      if (!accountId) {
-        const acct = db.prepare(`SELECT id FROM accounts WHERE business_id = ? AND name = 'Accounts Payable'`).get(bill.business_id);
-        accountId = acct ? acct.id : null;
+      const cashAccountId = findCashAccount(bill.business_id);
+      const label = `Bill ${bill.bill_number} payment - ${vendor ? vendor.name : ''}`;
+      const insertTx = db.prepare(`
+        INSERT INTO transactions (id, business_id, date, description, amount, account_id, bill_id, notes, is_reconciled)
+        VALUES (?,?,?,?,?,?,?,?,1)
+      `);
+
+      if (cashAccountId) {
+        transactionId = uuid();
+        insertTx.run(transactionId, bill.business_id, date, label, -Math.abs(amount), cashAccountId, req.params.id, `Payment for bill ${bill.bill_number}`);
       }
-      transactionId = uuid();
-      db.prepare(`
-        INSERT INTO transactions (id, business_id, date, description, amount, account_id, notes)
-        VALUES (?,?,?,?,?,?,?)
-      `).run(transactionId, bill.business_id, date, `Bill ${bill.bill_number} payment - ${vendor ? vendor.name : ''}`, -Math.abs(amount), accountId, `Payment for bill ${bill.bill_number}`);
+
+      if (business.accounting_method === 'accrual') {
+        const apAccountId = findAccountByName(bill.business_id, 'Accounts Payable');
+        if (apAccountId) insertTx.run(uuid(), bill.business_id, date, label, -Math.abs(amount), apAccountId, req.params.id, `Payment for bill ${bill.bill_number}`);
+      } else {
+        let expenseAccountId = bill.expense_account_id || findAccountByName(bill.business_id, 'Uncategorized');
+        if (expenseAccountId) insertTx.run(uuid(), bill.business_id, date, label, -Math.abs(amount), expenseAccountId, req.params.id, `Payment for bill ${bill.bill_number}`);
+      }
     }
 
     db.prepare(`
