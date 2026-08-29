@@ -4,9 +4,10 @@ const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const path = require('path');
 const { v4: uuid } = require('uuid');
+const multer = require('multer');
 const db = require('./db');
 const defaultAccounts = require('./defaultAccounts');
-const { parseStatementText } = require('./parseStatement');
+const { parseStatementText, parseStatementCsv, parseStatementPdf } = require('./parseStatement');
 const { categorizeTransactions } = require('./categorize');
 const { calculateEstimate, quarterlyDueDates } = require('./taxEstimate');
 const plaid = require('./plaid');
@@ -21,6 +22,8 @@ app.use(express.json({ limit: '2mb' }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 app.use(auth.attachUser);
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 // ---------- Auth ----------
 app.post('/api/auth/signup', (req, res) => {
@@ -186,15 +189,11 @@ app.delete('/api/accounts/:id', auth.requireBusinessAccess(businessIdForAccount)
 });
 
 // ---------- Statement upload (paste text) + AI categorization ----------
-app.post('/api/statements', auth.requireBusinessAccess(), auth.requireWriteAccess, async (req, res) => {
-  const { business_id, source_name, statement_text, statement_ending_balance } = req.body;
-  if (!statement_text) {
-    return res.status(400).json({ error: 'statement_text required' });
-  }
-
-  const { rows, skipped } = parseStatementText(statement_text);
+// Shared logic: takes already-parsed {rows, skipped}, categorizes and saves them
+// as a new statement + transactions. Used by both the paste-text and file-upload routes.
+async function ingestStatementRows(business_id, source_name, statement_ending_balance, rows, skipped, res) {
   if (rows.length === 0) {
-    return res.status(400).json({ error: 'Could not parse any transactions from the pasted text', skipped });
+    return res.status(400).json({ error: 'Could not find any transactions in that statement', skipped });
   }
 
   const statementId = uuid();
@@ -216,13 +215,10 @@ app.post('/api/statements', auth.requireBusinessAccess(), auth.requireWriteAcces
     VALUES (?,?,?,?,?,?,?,?,?,?)
   `);
 
-  const inserted = [];
   const insertAll = db.transaction(() => {
     for (const t of categorized) {
       const acct = accountsByName[t.account_name] || accountsByName['Uncategorized'];
-      const id = uuid();
-      insertTx.run(id, business_id, statementId, t.date, t.description, t.amount, acct.id, acct.id, t.confidence, t.reasoning);
-      inserted.push(id);
+      insertTx.run(uuid(), business_id, statementId, t.date, t.description, t.amount, acct.id, acct.id, t.confidence, t.reasoning);
     }
   });
   insertAll();
@@ -239,6 +235,39 @@ app.post('/api/statements', auth.requireBusinessAccess(), auth.requireWriteAcces
     transactions: txns,
     skipped_lines: skipped,
   });
+}
+
+app.post('/api/statements', auth.requireBusinessAccess(), auth.requireWriteAccess, async (req, res) => {
+  const { business_id, source_name, statement_text, statement_ending_balance } = req.body;
+  if (!statement_text) {
+    return res.status(400).json({ error: 'statement_text required' });
+  }
+  const { rows, skipped } = parseStatementText(statement_text);
+  await ingestStatementRows(business_id, source_name, statement_ending_balance, rows, skipped, res);
+});
+
+// File upload version: accepts a .csv or .pdf bank statement export.
+// upload.single runs first so multer has parsed req.body.business_id out of the
+// multipart form before the access-check middleware needs to read it.
+app.post('/api/statements/upload', upload.single('file'), auth.requireBusinessAccess(), auth.requireWriteAccess, async (req, res) => {
+  const { business_id, source_name, statement_ending_balance } = req.body;
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+  const filename = req.file.originalname.toLowerCase();
+  let parsed;
+  try {
+    if (filename.endsWith('.pdf')) {
+      parsed = await parseStatementPdf(req.file.buffer);
+    } else if (filename.endsWith('.csv') || filename.endsWith('.txt')) {
+      parsed = parseStatementCsv(req.file.buffer.toString('utf8'));
+    } else {
+      return res.status(400).json({ error: 'Please upload a .csv, .txt, or .pdf file' });
+    }
+  } catch (err) {
+    return res.status(400).json({ error: 'Could not read that file: ' + err.message });
+  }
+
+  await ingestStatementRows(business_id, source_name, statement_ending_balance, parsed.rows, parsed.skipped, res);
 });
 
 // ---------- Transactions ----------

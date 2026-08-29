@@ -767,7 +767,7 @@ async function renderInvoiceDetail(id) {
 function renderImport() {
   main.innerHTML = `
     <h1 class="page-title">Import Statement</h1>
-    <p class="page-sub">Paste transactions from your bank statement — one per line. The AI will sort each into your Chart of Accounts.</p>
+    <p class="page-sub">Upload a file from your bank, or paste transactions directly. The AI will sort each into your Chart of Accounts.</p>
 
     <div class="card" id="plaidCard">
       <h2>Connect a bank (live sync)</h2>
@@ -775,6 +775,21 @@ function renderImport() {
     </div>
 
     <div class="card">
+      <h2>Upload a file</h2>
+      <p style="font-size:12.5px; color:var(--ink-soft); margin-bottom:12px;">Accepts a .csv export from your bank, or a .pdf statement.</p>
+      <div class="field-row">
+        <div class="field"><label class="field-label">Statement label</label><input type="text" id="fileStmtName" placeholder="e.g. Chase Checking — August 2026"></div>
+        <div class="field"><label class="field-label">Statement ending balance (optional)</label><input type="number" step="0.01" id="fileStmtBalance" placeholder="e.g. 4210.55"></div>
+      </div>
+      <div class="field">
+        <label class="field-label">File</label>
+        <input type="file" id="stmtFile" accept=".csv,.txt,.pdf">
+      </div>
+      <button class="btn" id="uploadBtn">Upload &amp; categorize</button>
+    </div>
+
+    <div class="card">
+      <h2>Or paste statement text</h2>
       <div class="field">
         <label class="field-label">Statement label</label>
         <input type="text" id="stmtName" placeholder="e.g. Chase Checking — August 2026">
@@ -795,6 +810,32 @@ function renderImport() {
   `;
 
   renderPlaidCard();
+
+  $('#uploadBtn').onclick = async () => {
+    const fileInput = $('#stmtFile');
+    if (!fileInput.files.length) return toast('Choose a file first', true);
+    const btn = $('#uploadBtn');
+    btn.disabled = true; btn.textContent = 'Categorizing…';
+    try {
+      const formData = new FormData();
+      formData.append('file', fileInput.files[0]);
+      formData.append('business_id', state.currentBusinessId);
+      if ($('#fileStmtName').value.trim()) formData.append('source_name', $('#fileStmtName').value.trim());
+      if ($('#fileStmtBalance').value) formData.append('statement_ending_balance', $('#fileStmtBalance').value);
+
+      const res = await fetch('/api/statements/upload', { method: 'POST', credentials: 'include', body: formData });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Upload failed');
+
+      state.statements = await api('/statements?business_id=' + state.currentBusinessId);
+      renderImportResult(result);
+      toast(`Imported ${result.transactions.length} transactions`);
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      btn.disabled = false; btn.textContent = 'Upload & categorize';
+    }
+  };
 
   $('#importBtn').onclick = async () => {
     const statement_text = $('#stmtText').value.trim();
