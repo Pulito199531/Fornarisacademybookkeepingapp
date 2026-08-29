@@ -1157,12 +1157,31 @@ function confidenceBadge(c) {
   return `<span class="badge uncertain">${Math.round(c * 100)}%${t(' — check')}</span>`;
 }
 
+// Groups accounts under <optgroup> by type so the dropdown stays usable with
+// 40+ accounts. Bank transactions are often NOT income/expense — an owner
+// draw, a loan payment, a transfer to savings, an equipment purchase — so
+// every account type needs to be selectable here, not just income/expense.
+function accountOptionsGrouped(selectedId) {
+  const groups = [
+    { type: 'income', label: t('Income ').trim() },
+    { type: 'expense', label: t('Expenses') },
+    { type: 'equity', label: t('Equity') },
+    { type: 'asset', label: t('Assets') },
+    { type: 'liability', label: t('Liabilities') },
+  ];
+  return groups.map(g => {
+    const accts = state.accounts.filter(a => a.type === g.type);
+    if (!accts.length) return '';
+    return `<optgroup label="${escapeHtml(g.label)}">
+      ${accts.map(a => `<option value="${a.id}" ${a.id === selectedId ? 'selected' : ''}>${escapeHtml(a.name)}</option>`).join('')}
+    </optgroup>`;
+  }).join('');
+}
+
 function accountSelectHtml(t) {
   const cls = t.account_name === 'Uncategorized' ? 'uncategorized' : (t.ai_confidence !== null && t.ai_confidence < 0.75 ? 'ai-low' : '');
   return `<select class="account-select ${cls}" data-txn-id="${t.id}">
-    ${state.accounts.filter(a => ['income','expense'].includes(a.type) || a.id === t.account_id).map(a =>
-      `<option value="${a.id}" ${a.id === t.account_id ? 'selected' : ''}>${escapeHtml(a.name)}</option>`
-    ).join('')}
+    ${accountOptionsGrouped(t.account_id)}
   </select>`;
 }
 
@@ -1196,7 +1215,7 @@ async function renderTransactions() {
         <div class="field" style="flex:1.4;">
           <label class="field-label">${t('Category')}</label>
           <select class="form-input" id="manAccount">
-            ${state.accounts.map(a => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('')}
+            ${accountOptionsGrouped(null)}
           </select>
         </div>
         <div class="field" style="align-self:flex-end;"><button class="btn" id="manAddBtn">${t('Add')}</button></div>
