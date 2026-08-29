@@ -154,6 +154,15 @@ const ES = {
   "statement says": "el estado de cuenta indica", "Review before locking.": "Revisa antes de bloquear.",
   "Lock this period? Transactions will be marked reconciled.": "¿Bloquear este período? Las transacciones se marcarán como conciliadas.",
   "Period locked": "Período bloqueado",
+  "Business type": "Tipo de negocio",
+  "This determines the right equity accounts (owner draws, shareholder distributions, partner capital, etc.) for how this business is legally structured.": "Esto determina las cuentas de capital correctas (retiros del propietario, distribuciones a accionistas, capital de socios, etc.) según cómo esté estructurado legalmente este negocio.",
+  "Entity type": "Tipo de entidad", "— not set —": "— sin definir —",
+  "Add missing accounts for this type": "Agregar cuentas faltantes para este tipo",
+  "Pick an entity type first": "Elige primero un tipo de entidad",
+  "Added": "Agregado", "All accounts for this type already exist": "Todas las cuentas para este tipo ya existen",
+  "Sole Proprietor": "Propietario Único", "Single-Member LLC": "LLC de un solo miembro",
+  "LLC (multi-member)": "LLC (varios miembros)", "Partnership": "Sociedad",
+  "S Corporation": "Corporación S", "C Corporation": "Corporación C",
 };
 
 let currentLang = state.lang;
@@ -422,14 +431,31 @@ async function renderDashboard() {
 }
 
 // ---------- Chart of Accounts ----------
-function renderAccounts() {
+async function renderAccounts() {
   const byType = { asset: [], liability: [], equity: [], income: [], expense: [] };
   state.accounts.forEach(a => byType[a.type].push(a));
   const typeLabels = { asset: t('Assets'), liability: t('Liabilities'), equity: t('Equity'), income: t('Income '), expense: t('Expenses') };
+  const entityTypes = await api('/entity-types');
+  const business = state.businesses.find(b => b.id === state.currentBusinessId);
 
   main.innerHTML = `
     <h1 class="page-title">${t('Chart of Accounts')}</h1>
     <p class="page-sub">${t('The categories every transaction gets sorted into.')}</p>
+
+    <div class="card">
+      <h2>${t('Business type')}</h2>
+      <p style="font-size:12.5px; color:var(--ink-soft); margin-bottom:12px;">${t('This determines the right equity accounts (owner draws, shareholder distributions, partner capital, etc.) for how this business is legally structured.')}</p>
+      <div class="field-row">
+        <div class="field" style="max-width:260px;">
+          <label class="field-label">${t('Entity type')}</label>
+          <select class="form-input" id="entityTypeSelect">
+            <option value="">${t('— not set —')}</option>
+            ${Object.entries(entityTypes).map(([val, label]) => `<option value="${val}" ${business.entity_type === val ? 'selected' : ''}>${t(label)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field" style="align-self:flex-end;"><button class="btn" id="addEntityAcctsBtn">${t('Add missing accounts for this type')}</button></div>
+      </div>
+    </div>
 
     <div class="card">
       <h2>${t('Add account')}</h2>
@@ -471,6 +497,22 @@ function renderAccounts() {
       </div>
     `).join('')}
   `;
+
+  $('#addEntityAcctsBtn').onclick = async () => {
+    const entityType = $('#entityTypeSelect').value;
+    if (!entityType) return toast(t('Pick an entity type first'), true);
+    try {
+      if (business.entity_type !== entityType) {
+        const updated = await api('/businesses/' + state.currentBusinessId, { method: 'PATCH', body: JSON.stringify({ entity_type: entityType }) });
+        const idx = state.businesses.findIndex(b => b.id === state.currentBusinessId);
+        state.businesses[idx] = updated;
+      }
+      const result = await api(`/businesses/${state.currentBusinessId}/seed-entity-accounts`, { method: 'POST', body: JSON.stringify({ entity_type: entityType }) });
+      state.accounts = await api('/accounts?business_id=' + state.currentBusinessId);
+      toast(result.added.length ? `${t('Added')}: ${result.added.join(', ')}` : t('All accounts for this type already exist'));
+      renderAccounts();
+    } catch (e) { toast(e.message, true); }
+  };
 
   $('#addAcctBtn').onclick = async () => {
     const name = $('#acctName').value.trim();

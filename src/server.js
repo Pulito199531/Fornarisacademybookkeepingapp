@@ -6,7 +6,7 @@ const path = require('path');
 const { v4: uuid } = require('uuid');
 const multer = require('multer');
 const db = require('./db');
-const defaultAccounts = require('./defaultAccounts');
+const { getDefaultAccounts, ENTITY_TYPE_LABELS } = require('./defaultAccounts');
 const { parseStatementText, parseStatementCsv, parseStatementPdf } = require('./parseStatement');
 const { categorizeTransactions } = require('./categorize');
 const { calculateEstimate, quarterlyDueDates } = require('./taxEstimate');
@@ -92,7 +92,7 @@ app.post('/api/businesses', (req, res) => {
     VALUES (?,?,?,?,?,?)
   `);
   const seed = db.transaction(() => {
-    for (const a of defaultAccounts) {
+    for (const a of getDefaultAccounts(entity_type)) {
       insertAccount.run(uuid(), id, a.name, a.type, a.subtype || null, a.schedule_c_line || null);
     }
   });
@@ -115,6 +115,37 @@ app.patch('/api/businesses/:id', auth.requireBusinessAccess(businessIdForBusines
     WHERE id = ?
   `).run(name || null, entity_type || null, industry || null, filing_status || null, state || null, req.params.id);
   res.json(db.prepare('SELECT * FROM businesses WHERE id = ?').get(req.params.id));
+});
+
+app.get('/api/entity-types', (req, res) => {
+  res.json(ENTITY_TYPE_LABELS);
+});
+
+// Retroactively adds any of the standard accounts for a given entity type that
+// this business doesn't already have (matched by name) — lets an existing
+// business pick up the right equity accounts (Shareholder Distributions, etc.)
+// without having to recreate the business from scratch.
+app.post('/api/businesses/:id/seed-entity-accounts', auth.requireBusinessAccess(businessIdForBusinessParam), auth.requireWriteAccess, (req, res) => {
+  const { entity_type } = req.body;
+  if (!entity_type) return res.status(400).json({ error: 'entity_type required' });
+
+  const existingNames = new Set(
+    db.prepare('SELECT name FROM accounts WHERE business_id = ?').all(req.params.id).map(a => a.name)
+  );
+  const toAdd = getDefaultAccounts(entity_type).filter(a => !existingNames.has(a.name));
+
+  const insertAccount = db.prepare(`
+    INSERT INTO accounts (id, business_id, name, type, subtype, schedule_c_line)
+    VALUES (?,?,?,?,?,?)
+  `);
+  const run = db.transaction(() => {
+    for (const a of toAdd) {
+      insertAccount.run(uuid(), req.params.id, a.name, a.type, a.subtype || null, a.schedule_c_line || null);
+    }
+  });
+  run();
+
+  res.json({ added: toAdd.map(a => a.name) });
 });
 
 // ---------- Business members (multi-user access) ----------
