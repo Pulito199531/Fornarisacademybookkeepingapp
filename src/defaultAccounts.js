@@ -12,9 +12,11 @@ module.exports = [
 
   { name: "Owner's Equity", type: 'equity' },
   { name: "Owner's Draw", type: 'equity' },
+  { name: 'Shareholder Distribution', type: 'equity' },
 
   { name: 'Client Revenue', type: 'income' },
   { name: 'Product Sales', type: 'income' },
+  { name: 'Course & Program Sales', type: 'income' },
   { name: 'Other Income', type: 'income' },
 
   { name: 'Advertising & Marketing', type: 'expense', schedule_c_line: 'Line 8' },
@@ -22,6 +24,7 @@ module.exports = [
   { name: 'Contract Labor', type: 'expense', schedule_c_line: 'Line 11' },
   { name: 'Insurance', type: 'expense', schedule_c_line: 'Line 15' },
   { name: 'Interest Expense', type: 'expense', schedule_c_line: 'Line 16b' },
+  { name: 'Loan Payment (Principal)', type: 'expense', schedule_c_line: null },
   { name: 'Legal & Professional Services', type: 'expense', schedule_c_line: 'Line 17' },
   { name: 'Meals (50% deductible)', type: 'expense', schedule_c_line: 'Line 24b' },
   { name: 'Office Supplies', type: 'expense', schedule_c_line: 'Line 22' },
@@ -34,5 +37,7 @@ module.exports = [
   { name: 'Payroll & Wages', type: 'expense', schedule_c_line: 'Line 26' },
   { name: 'Taxes & Licenses', type: 'expense', schedule_c_line: 'Line 23' },
   { name: 'Education & Training', type: 'expense', schedule_c_line: 'Line 27a' },
+  { name: 'Equipment Financing', type: 'expense', schedule_c_line: null },
+  { name: 'Telephone & Fax Services', type: 'expense', schedule_c_line: 'Line 27a' },
   { name: 'Uncategorized', type: 'expense' },
 ];

@@ -3,40 +3,46 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Ledgerline — Bookkeeping</title>
+<title>Fornaris Ledger Academy</title>
 <link rel="stylesheet" href="style.css">
 <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
 </head>
 <body>
 <div id="app" style="display:none;">
   <aside class="sidebar">
-    <div class="brand">Ledgerline <span class="mark">MVP</span></div>
-    <div id="userBadge" style="font-size:12px; color:rgba(237,239,234,0.7); display:flex; justify-content:space-between; align-items:center;">
-      <span id="userEmail"></span>
-      <a href="#" id="logoutLink" style="color:var(--ochre); font-size:11px;">Sign out</a>
+    <div class="brand">Fornaris Ledger Academy</div>
+
+    <div style="display:flex; gap:4px;">
+      <button id="langEnBtn" class="lang-btn">EN</button>
+      <button id="langEsBtn" class="lang-btn">ES</button>
     </div>
 
-    <button id="practiceBtn" class="business-picker button" style="width:100%; text-align:left; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.2); color:#EDEFEA; padding:9px 12px; border-radius:4px; font-size:12.5px; cursor:pointer; margin-bottom:2px;">⊞ All clients overview</button>
+    <div id="userBadge" style="font-size:12px; color:rgba(237,239,234,0.7); display:flex; justify-content:space-between; align-items:center;">
+      <span id="userEmail"></span>
+      <a href="#" id="logoutLink" style="color:var(--ochre); font-size:11px;" data-i18n="signOut">Sign out</a>
+    </div>
+
+    <button id="practiceBtn" class="business-picker button" style="width:100%; text-align:left; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.2); color:#EDEFEA; padding:9px 12px; border-radius:4px; font-size:12.5px; cursor:pointer; margin-bottom:2px;">⊞ <span data-i18n="allClientsOverview">All clients overview</span></button>
 
     <div class="business-picker">
-      <label class="field-label" style="color:rgba(237,239,234,0.6)">Business</label>
+      <label class="field-label" style="color:rgba(237,239,234,0.6)" data-i18n="business">Business</label>
       <select id="businessSelect"></select>
-      <button id="newBusinessBtn">+ New business</button>
+      <button id="newBusinessBtn">+ <span data-i18n="newBusiness">New business</span></button>
     </div>
 
     <nav class="tabs" id="tabs">
-      <button data-tab="dashboard" class="active"><span class="num">01</span> Dashboard</button>
-      <button data-tab="accounts"><span class="num">02</span> Chart of Accounts</button>
-      <button data-tab="invoicing"><span class="num">03</span> Invoicing</button>
-      <button data-tab="import"><span class="num">04</span> Import Statement</button>
-      <button data-tab="transactions"><span class="num">05</span> Transactions</button>
-      <button data-tab="reconciliation"><span class="num">06</span> Reconciliation</button>
-      <button data-tab="reports"><span class="num">07</span> Reports</button>
-      <button data-tab="taxes"><span class="num">08</span> Estimated Taxes</button>
-      <button data-tab="team"><span class="num">09</span> Team &amp; Access</button>
+      <button data-tab="dashboard" class="active"><span class="num">01</span> <span data-i18n="dashboard">Dashboard</span></button>
+      <button data-tab="accounts"><span class="num">02</span> <span data-i18n="chartOfAccounts">Chart of Accounts</span></button>
+      <button data-tab="invoicing"><span class="num">03</span> <span data-i18n="invoicing">Invoicing</span></button>
+      <button data-tab="import"><span class="num">04</span> <span data-i18n="importStatement">Import Statement</span></button>
+      <button data-tab="transactions"><span class="num">05</span> <span data-i18n="transactions">Transactions</span></button>
+      <button data-tab="reconciliation"><span class="num">06</span> <span data-i18n="reconciliation">Reconciliation</span></button>
+      <button data-tab="reports"><span class="num">07</span> <span data-i18n="reports">Reports</span></button>
+      <button data-tab="taxes"><span class="num">08</span> <span data-i18n="estimatedTaxes">Estimated Taxes</span></button>
+      <button data-tab="team"><span class="num">09</span> <span data-i18n="teamAccess">Team &amp; Access</span></button>
     </nav>
 
-    <div class="sidebar-footer">Ledgerline — local prototype build</div>
+    <div class="sidebar-footer">Fornaris Ledger Academy</div>
   </aside>
 
   <main id="main"></main>

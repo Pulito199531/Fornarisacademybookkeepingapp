@@ -1,7 +1,7 @@
 {
   "name": "bookkeeping-app",
   "version": "1.0.0",
-  "description": "",
+  "description": "Bookkeeping software for Fornaris Accounting and Tax Academy clients",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
@@ -26,5 +26,6 @@
     "pdfkit": "^0.20.1",
     "plaid": "^46.0.0",
     "uuid": "^14.0.2"
-  }
+  },
+  "productName": "Fornaris Ledger Academy"
 }

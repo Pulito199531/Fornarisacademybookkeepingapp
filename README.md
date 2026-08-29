@@ -1,4 +1,4 @@
-# Ledgerline — Bookkeeping MVP
+# Fornaris Ledger Academy — Bookkeeping Software
 
 A QuickBooks-style bookkeeping app for self-employed people and small business owners:
 paste a bank statement, get transactions auto-categorized against a Chart of Accounts,

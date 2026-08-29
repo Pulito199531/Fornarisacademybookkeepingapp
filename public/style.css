@@ -50,9 +50,10 @@ a { color: inherit; }
 
 .brand {
   font-family: var(--font-display);
-  font-size: 22px;
+  font-size: 17px;
   font-weight: 600;
   letter-spacing: 0.01em;
+  line-height: 1.2;
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -124,6 +125,25 @@ nav.tabs button.active { background: rgba(255,255,255,0.1); color: #fff; font-we
   color: rgba(237,239,234,0.45);
   border-top: 1px solid rgba(255,255,255,0.15);
   padding-top: 14px;
+}
+
+.lang-btn {
+  flex: 1;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: rgba(237,239,234,0.65);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 6px 0;
+  border-radius: 4px;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+}
+.lang-btn.active {
+  background: var(--ochre);
+  border-color: var(--ochre);
+  color: #22201A;
+  font-weight: 600;
 }
 
 main {
