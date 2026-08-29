@@ -106,4 +106,29 @@ function getDefaultAccounts(entityType) {
   return [...COMMON_ASSETS, ...COMMON_LIABILITIES, ...equity, ...COMMON_INCOME, ...COMMON_EXPENSES];
 }
 
-module.exports = { getDefaultAccounts, ENTITY_TYPE_LABELS };
+// The full master catalog across every entity type, deduplicated by name, for
+// a "browse and add from the standard list" picker. Equity/expense accounts
+// that only apply to certain entity types (e.g. Shareholder Distributions)
+// are tagged with which ones, so the UI can show that context.
+function getAllStandardAccounts() {
+  const byName = new Map();
+  const addAll = (list, entityTag) => {
+    for (const a of list) {
+      if (!byName.has(a.name)) {
+        byName.set(a.name, { ...a, entityTypes: entityTag ? [entityTag] : [] });
+      } else if (entityTag) {
+        byName.get(a.name).entityTypes.push(entityTag);
+      }
+    }
+  };
+  addAll(COMMON_ASSETS);
+  addAll(COMMON_LIABILITIES);
+  addAll(COMMON_INCOME);
+  addAll(COMMON_EXPENSES);
+  for (const [entityType, list] of Object.entries(EQUITY_BY_ENTITY)) {
+    addAll(list, entityType);
+  }
+  return [...byName.values()];
+}
+
+module.exports = { getDefaultAccounts, getAllStandardAccounts, ENTITY_TYPE_LABELS };

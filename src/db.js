@@ -162,5 +162,6 @@ function ensureColumn(table, column, ddl) {
 }
 ensureColumn('businesses', 'filing_status', 'filing_status TEXT');
 ensureColumn('businesses', 'state', 'state TEXT');
+ensureColumn('statements', 'statement_beginning_balance', 'statement_beginning_balance REAL');
 
 module.exports = db;

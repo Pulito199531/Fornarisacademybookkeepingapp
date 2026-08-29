@@ -163,6 +163,22 @@ const ES = {
   "Sole Proprietor": "Propietario Único", "Single-Member LLC": "LLC de un solo miembro",
   "LLC (multi-member)": "LLC (varios miembros)", "Partnership": "Sociedad",
   "S Corporation": "Corporación S", "C Corporation": "Corporación C",
+  "Or pick from the full standard list": "O elige de la lista estándar completa",
+  "Standard accounts": "Cuentas estándar", "Add selected": "Agregar seleccionadas",
+  "already added": "ya agregada", "Delete selected": "Eliminar seleccionadas",
+  "Nothing new selected": "No hay nada nuevo seleccionado",
+  "Select at least one account first": "Selecciona al menos una cuenta primero",
+  "Remove the selected accounts? Existing transactions keep their category.": "¿Eliminar las cuentas seleccionadas? Las transacciones existentes mantendrán su categoría.",
+  "Accounts removed": "Cuentas eliminadas",
+  "Set the beginning and ending balance from your statement, then check off each transaction as it clears — just like reconciling in QuickBooks.": "Ingresa el saldo inicial y final de tu estado de cuenta, luego marca cada transacción a medida que se compensa — igual que conciliar en QuickBooks.",
+  "Beginning balance": "Saldo inicial", "Ending balance": "Saldo final", "Save balances": "Guardar saldos",
+  "Cleared": "Compensado", "Target change": "Cambio objetivo", "Difference": "Diferencia",
+  "Enter a beginning and ending balance above to start reconciling.": "Ingresa un saldo inicial y final arriba para comenzar a conciliar.",
+  "Difference is $0.00 — ready to finish.": "La diferencia es $0.00 — listo para finalizar.",
+  "Check off transactions until the difference reaches $0.00.": "Marca transacciones hasta que la diferencia llegue a $0.00.",
+  "Unlock": "Desbloquear", "Finish now": "Finalizar ahora", "Balances saved": "Saldos guardados",
+  "Finish reconciling this period? Checked transactions will be locked.": "¿Finalizar la conciliación de este período? Las transacciones marcadas se bloquearán.",
+  "Period unlocked": "Período desbloqueado",
 };
 
 let currentLang = state.lang;
@@ -437,6 +453,8 @@ async function renderAccounts() {
   const typeLabels = { asset: t('Assets'), liability: t('Liabilities'), equity: t('Equity'), income: t('Income '), expense: t('Expenses') };
   const entityTypes = await api('/entity-types');
   const business = state.businesses.find(b => b.id === state.currentBusinessId);
+  const standardList = await api('/accounts/standard-list');
+  const existingNames = new Set(state.accounts.map(a => a.name));
 
   main.innerHTML = `
     <h1 class="page-title">${t('Chart of Accounts')}</h1>
@@ -475,17 +493,46 @@ async function renderAccounts() {
           <button class="btn" id="addAcctBtn">${t('Add')}</button>
         </div>
       </div>
+      <button class="btn secondary" id="browseStandardBtn" style="margin-top:4px;">${t('Or pick from the full standard list')}</button>
+    </div>
+
+    <div class="card" id="standardListCard" style="display:none;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h2 style="margin:0;">${t('Standard accounts')}</h2>
+        <button class="btn" id="addSelectedStandardBtn">${t('Add selected')}</button>
+      </div>
+      ${Object.keys(typeLabels).map(type => {
+        const accts = standardList.filter(a => a.type === type);
+        if (!accts.length) return '';
+        return `
+          <div style="margin-bottom:14px;">
+            <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; color:var(--ink-soft); margin-bottom:6px;">${typeLabels[type]}</div>
+            ${accts.map(a => `
+              <label style="display:flex; align-items:center; gap:8px; padding:4px 0; font-size:13px; ${existingNames.has(a.name) ? 'opacity:0.4;' : ''}">
+                <input type="checkbox" class="std-acct-check" value="${escapeHtml(a.name)}" data-type="${a.type}" data-subtype="${a.subtype || ''}" data-schedc="${a.schedule_c_line || ''}" ${existingNames.has(a.name) ? 'disabled checked' : ''}>
+                ${escapeHtml(a.name)}
+                ${a.entityTypes && a.entityTypes.length ? `<span style="font-family:var(--font-mono); font-size:10px; color:var(--ink-soft);">(${a.entityTypes.join(', ')})</span>` : ''}
+                ${existingNames.has(a.name) ? `<span style="font-size:11px; color:var(--ink-soft);">— ${t('already added')}</span>` : ''}
+              </label>
+            `).join('')}
+          </div>
+        `;
+      }).join('')}
     </div>
 
     ${Object.keys(typeLabels).map(type => `
       <div class="card">
-        <h2>${typeLabels[type]}</h2>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <h2 style="margin:0;">${typeLabels[type]}</h2>
+          ${byType[type].length ? `<button class="btn secondary" style="padding:4px 10px; font-size:12px;" onclick="deleteSelectedAccounts('${type}')">${t('Delete selected')}</button>` : ''}
+        </div>
         ${byType[type].length ? `
           <table class="ledger">
-            <thead><tr><th>${t('Name')}</th><th>${t('Schedule C')}</th><th></th></tr></thead>
+            <thead><tr><th style="width:24px;"></th><th>${t('Name')}</th><th>${t('Schedule C')}</th><th></th></tr></thead>
             <tbody>
               ${byType[type].map(a => `
                 <tr>
+                  <td><input type="checkbox" class="acct-row-check" data-type="${type}" value="${a.id}"></td>
                   <td>${escapeHtml(a.name)}</td>
                   <td style="color:var(--ink-soft); font-family:var(--font-mono); font-size:12px;">${a.schedule_c_line || '—'}</td>
                   <td style="text-align:right;"><button class="btn secondary" style="padding:4px 10px; font-size:12px;" onclick="deleteAccount('${a.id}')">${t('Remove')}</button></td>
@@ -525,6 +572,38 @@ async function renderAccounts() {
       renderAccounts();
     } catch (e) { toast(e.message, true); }
   };
+
+  $('#browseStandardBtn').onclick = () => {
+    const card = $('#standardListCard');
+    card.style.display = card.style.display === 'none' ? 'block' : 'none';
+  };
+
+  $('#addSelectedStandardBtn').onclick = async () => {
+    const checked = [...document.querySelectorAll('.std-acct-check:checked:not(:disabled)')];
+    if (!checked.length) return toast(t('Nothing new selected'), true);
+    const accounts = checked.map(c => ({
+      name: c.value, type: c.dataset.type,
+      subtype: c.dataset.subtype || null, schedule_c_line: c.dataset.schedc || null,
+    }));
+    try {
+      const result = await api('/accounts/bulk', { method: 'POST', body: JSON.stringify({ business_id: state.currentBusinessId, accounts }) });
+      state.accounts = await api('/accounts?business_id=' + state.currentBusinessId);
+      toast(`${t('Added')}: ${result.added.join(', ')}`);
+      renderAccounts();
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+async function deleteSelectedAccounts(type) {
+  const checked = [...document.querySelectorAll(`.acct-row-check[data-type="${type}"]:checked`)].map(c => c.value);
+  if (!checked.length) return toast(t('Select at least one account first'), true);
+  if (!confirm(t('Remove the selected accounts? Existing transactions keep their category.'))) return;
+  try {
+    await api('/accounts/bulk-delete', { method: 'POST', body: JSON.stringify({ business_id: state.currentBusinessId, account_ids: checked }) });
+    state.accounts = await api('/accounts?business_id=' + state.currentBusinessId);
+    toast(t('Accounts removed'));
+    renderAccounts();
+  } catch (e) { toast(e.message, true); }
 }
 
 async function deleteAccount(id) {
@@ -1277,7 +1356,7 @@ async function renderReconciliation() {
 
   main.innerHTML = `
     <h1 class="page-title">${t('Reconciliation')}</h1>
-    <p class="page-sub">${t("Match each imported statement's transactions against its ending balance, then lock the period.")}</p>
+    <p class="page-sub">${t('Set the beginning and ending balance from your statement, then check off each transaction as it clears — just like reconciling in QuickBooks.')}</p>
     <div class="field" style="max-width:360px;">
       <label class="field-label">${t('Statement')}</label>
       <select class="form-input" id="reconStmtSelect">
@@ -1294,33 +1373,45 @@ async function renderReconciliation() {
 async function loadReconciliation() {
   const statementId = $('#reconStmtSelect').value;
   const summary = await api(`/reconciliation/summary?business_id=${state.currentBusinessId}&statement_id=${statementId}`);
-  const txns = await api(`/transactions?business_id=${state.currentBusinessId}&statement_id=${statementId}`);
-  const isLocked = txns.length && txns[0].is_reconciled;
-
-  const statusHtml = summary.matches_statement === null
-    ? `<div class="recon-strip">${t('No ending balance was entered for this statement — add one on import to auto-check the match.')}</div>`
-    : summary.matches_statement
-      ? `<div class="recon-strip match">✓ ${t('Transactions net to')} ${fmt(summary.net_change)}, ${t('matching the statement ending balance.')}</div>`
-      : `<div class="recon-strip mismatch">⚠ ${t('Transactions net to')} ${fmt(summary.net_change)}, ${t('statement says')} ${fmt(summary.statement.statement_ending_balance)}. ${t('Review before locking.')}</div>`;
+  const txns = summary.transactions;
+  const isLocked = summary.is_locked;
+  const hasBalances = summary.beginning_balance !== null && summary.ending_balance !== null;
 
   $('#reconBody').innerHTML = `
     <div class="card">
-      <div class="stat-grid">
-        <div class="stat"><div class="label">${t('Transactions')}</div><div class="value">${summary.transaction_count}</div></div>
-        <div class="stat"><div class="label">${t('Net change')}</div><div class="value">${fmt(summary.net_change)}</div></div>
-        <div class="stat"><div class="label">${t('Status')}</div><div class="value" style="font-size:18px;">${isLocked ? t('Locked') : t('Open')}</div></div>
+      <div class="field-row">
+        <div class="field"><label class="field-label">${t('Beginning balance')}</label><input type="number" step="0.01" id="beginBalInput" value="${summary.beginning_balance ?? ''}" placeholder="0.00" ${isLocked ? 'disabled' : ''}></div>
+        <div class="field"><label class="field-label">${t('Ending balance')}</label><input type="number" step="0.01" id="endBalInput" value="${summary.ending_balance ?? ''}" placeholder="0.00" ${isLocked ? 'disabled' : ''}></div>
+        <div class="field" style="align-self:flex-end;"><button class="btn secondary" id="saveBalancesBtn" ${isLocked ? 'disabled' : ''}>${t('Save balances')}</button></div>
       </div>
-      ${statusHtml}
-      ${isLocked
-        ? `<p style="color:var(--ink-soft); font-size:13px;">${t('This period is reconciled and locked.')}</p>`
-        : `<button class="btn" id="lockBtn">${t('Lock &amp; mark reconciled')}</button>`}
     </div>
+
+    <div class="card">
+      <div class="stat-grid">
+        <div class="stat"><div class="label">${t('Cleared')}</div><div class="value">${fmt(summary.cleared_total)}</div></div>
+        <div class="stat"><div class="label">${t('Target change')}</div><div class="value">${hasBalances ? fmt(summary.ending_balance - summary.beginning_balance) : '—'}</div></div>
+        <div class="stat ${summary.is_balanced ? '' : 'negative'}"><div class="label">${t('Difference')}</div><div class="value" id="differenceValue">${hasBalances ? fmt(summary.difference) : '—'}</div></div>
+      </div>
+      ${!hasBalances
+        ? `<div class="recon-strip">${t('Enter a beginning and ending balance above to start reconciling.')}</div>`
+        : summary.is_balanced
+          ? `<div class="recon-strip match">✓ ${t('Difference is $0.00 — ready to finish.')}</div>`
+          : `<div class="recon-strip mismatch">⚠ ${t('Check off transactions until the difference reaches $0.00.')}</div>`}
+      ${isLocked
+        ? `<div style="display:flex; gap:10px; align-items:center;">
+             <p style="color:var(--ink-soft); font-size:13px; margin:0;">${t('This period is reconciled and locked.')}</p>
+             <button class="btn secondary" id="unlockBtn" style="padding:6px 14px; font-size:12.5px;">${t('Unlock')}</button>
+           </div>`
+        : `<button class="btn" id="finishBtn" ${hasBalances && summary.is_balanced ? '' : 'disabled'}>${t('Finish now')}</button>`}
+    </div>
+
     <div class="card">
       <table class="ledger">
-        <thead><tr><th>${t('Date')}</th><th>${t('Description')}</th><th class="amount">${t('Amount')}</th><th>${t('Category')}</th></tr></thead>
+        <thead><tr><th style="width:24px;"></th><th>${t('Date')}</th><th>${t('Description')}</th><th class="amount">${t('Amount')}</th><th>${t('Category')}</th></tr></thead>
         <tbody>
           ${txns.map(tx => `
             <tr>
+              <td><input type="checkbox" class="clear-check" data-id="${tx.id}" data-amount="${tx.amount}" ${tx.is_reconciled ? 'checked' : ''} ${isLocked ? 'disabled' : ''}></td>
               <td class="date">${tx.date}</td>
               <td>${escapeHtml(tx.description)}</td>
               <td class="amount ${tx.amount >= 0 ? 'positive' : 'negative'}">${fmt(tx.amount)}</td>
@@ -1332,11 +1423,63 @@ async function loadReconciliation() {
     </div>
   `;
 
-  if (!isLocked) {
-    $('#lockBtn').onclick = async () => {
-      if (!confirm(t('Lock this period? Transactions will be marked reconciled.'))) return;
+  $('#saveBalancesBtn').onclick = async () => {
+    const beginning = $('#beginBalInput').value;
+    const ending = $('#endBalInput').value;
+    try {
+      await api('/statements/' + statementId, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          statement_beginning_balance: beginning !== '' ? parseFloat(beginning) : null,
+          statement_ending_balance: ending !== '' ? parseFloat(ending) : null,
+        }),
+      });
+      toast(t('Balances saved'));
+      loadReconciliation();
+    } catch (e) { toast(e.message, true); }
+  };
+
+  // Live-update the difference as checkboxes are toggled, without waiting on
+  // a server round trip each click — same feel as QuickBooks' reconcile screen.
+  function recalcDifferenceLocally() {
+    if (!hasBalances) return;
+    let clearedTotal = 0;
+    document.querySelectorAll('.clear-check:checked').forEach(cb => { clearedTotal += parseFloat(cb.dataset.amount); });
+    const targetChange = summary.ending_balance - summary.beginning_balance;
+    const diff = Math.round((targetChange - clearedTotal) * 100) / 100;
+    $('#differenceValue').textContent = fmt(diff);
+    const finishBtn = $('#finishBtn');
+    if (finishBtn) finishBtn.disabled = Math.abs(diff) >= 0.005;
+  }
+
+  document.querySelectorAll('.clear-check').forEach(cb => {
+    cb.onchange = async () => {
+      recalcDifferenceLocally();
+      try {
+        await api(`/transactions/${cb.dataset.id}/clear`, { method: 'PATCH', body: JSON.stringify({ is_reconciled: cb.checked }) });
+      } catch (e) {
+        toast(e.message, true);
+        cb.checked = !cb.checked;
+        recalcDifferenceLocally();
+      }
+    };
+  });
+
+  const finishBtn = $('#finishBtn');
+  if (finishBtn) {
+    finishBtn.onclick = async () => {
+      if (!confirm(t('Finish reconciling this period? Checked transactions will be locked.'))) return;
       await api('/reconciliation/lock', { method: 'POST', body: JSON.stringify({ business_id: state.currentBusinessId, statement_id: statementId }) });
       toast(t('Period locked'));
+      loadReconciliation();
+    };
+  }
+
+  const unlockBtn = $('#unlockBtn');
+  if (unlockBtn) {
+    unlockBtn.onclick = async () => {
+      await api('/reconciliation/unlock', { method: 'POST', body: JSON.stringify({ business_id: state.currentBusinessId, statement_id: statementId }) });
+      toast(t('Period unlocked'));
       loadReconciliation();
     };
   }

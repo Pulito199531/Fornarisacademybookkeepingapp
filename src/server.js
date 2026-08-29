@@ -6,7 +6,7 @@ const path = require('path');
 const { v4: uuid } = require('uuid');
 const multer = require('multer');
 const db = require('./db');
-const { getDefaultAccounts, ENTITY_TYPE_LABELS } = require('./defaultAccounts');
+const { getDefaultAccounts, getAllStandardAccounts, ENTITY_TYPE_LABELS } = require('./defaultAccounts');
 const { parseStatementText, parseStatementCsv, parseStatementPdf } = require('./parseStatement');
 const { categorizeTransactions } = require('./categorize');
 const { calculateEstimate, quarterlyDueDates } = require('./taxEstimate');
@@ -200,6 +200,12 @@ app.get('/api/accounts', auth.requireBusinessAccess(), (req, res) => {
   res.json(db.prepare('SELECT * FROM accounts WHERE business_id = ? AND is_active = 1 ORDER BY type, name').all(business_id));
 });
 
+// The full master catalog of standard accounts across every entity type, for
+// a "browse and pick" UI — doesn't require a business_id, it's just reference data.
+app.get('/api/accounts/standard-list', (req, res) => {
+  res.json(getAllStandardAccounts());
+});
+
 app.post('/api/accounts', auth.requireBusinessAccess(), auth.requireWriteAccess, (req, res) => {
   const { business_id, name, type, subtype, schedule_c_line } = req.body;
   if (!name || !type) return res.status(400).json({ error: 'name and type required' });
@@ -211,6 +217,43 @@ app.post('/api/accounts', auth.requireBusinessAccess(), auth.requireWriteAccess,
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
+});
+
+// Adds several accounts at once from the standard list, skipping any the
+// business already has (matched by name). Used by the "add from list" picker.
+app.post('/api/accounts/bulk', auth.requireBusinessAccess(), auth.requireWriteAccess, (req, res) => {
+  const { business_id, accounts } = req.body;
+  if (!Array.isArray(accounts) || !accounts.length) return res.status(400).json({ error: 'accounts array required' });
+
+  const existingNames = new Set(
+    db.prepare('SELECT name FROM accounts WHERE business_id = ?').all(business_id).map(a => a.name)
+  );
+  const insertAccount = db.prepare(`
+    INSERT INTO accounts (id, business_id, name, type, subtype, schedule_c_line) VALUES (?,?,?,?,?,?)
+  `);
+  const added = [];
+  const run = db.transaction(() => {
+    for (const a of accounts) {
+      if (!a.name || !a.type || existingNames.has(a.name)) continue;
+      insertAccount.run(uuid(), business_id, a.name, a.type, a.subtype || null, a.schedule_c_line || null);
+      added.push(a.name);
+      existingNames.add(a.name);
+    }
+  });
+  run();
+  res.json({ added });
+});
+
+// Deletes several accounts at once (soft delete, same as the single-account route).
+app.post('/api/accounts/bulk-delete', auth.requireBusinessAccess(), auth.requireWriteAccess, (req, res) => {
+  const { business_id, account_ids } = req.body;
+  if (!Array.isArray(account_ids) || !account_ids.length) return res.status(400).json({ error: 'account_ids array required' });
+
+  // Only deactivate accounts that actually belong to this business.
+  const placeholders = account_ids.map(() => '?').join(',');
+  db.prepare(`UPDATE accounts SET is_active = 0 WHERE business_id = ? AND id IN (${placeholders})`)
+    .run(business_id, ...account_ids);
+  res.json({ ok: true });
 });
 
 function businessIdForAccount(req) { return db.prepare('SELECT business_id FROM accounts WHERE id = ?').get(req.params.id)?.business_id; }
@@ -355,24 +398,70 @@ app.delete('/api/transactions/:id', auth.requireBusinessAccess(businessIdForTran
 });
 
 // ---------- Reconciliation ----------
+function businessIdForStatement(req) { return db.prepare('SELECT business_id FROM statements WHERE id = ?').get(req.params.id)?.business_id; }
+
+// Sets/edits the beginning and ending balance for a statement — the two
+// numbers a QuickBooks-style reconciliation checks transactions against.
+app.patch('/api/statements/:id', auth.requireBusinessAccess(businessIdForStatement), auth.requireWriteAccess, (req, res) => {
+  const { statement_beginning_balance, statement_ending_balance, source_name } = req.body;
+  db.prepare(`
+    UPDATE statements SET
+      statement_beginning_balance = COALESCE(?, statement_beginning_balance),
+      statement_ending_balance = COALESCE(?, statement_ending_balance),
+      source_name = COALESCE(?, source_name)
+    WHERE id = ?
+  `).run(
+    statement_beginning_balance !== undefined ? statement_beginning_balance : null,
+    statement_ending_balance !== undefined ? statement_ending_balance : null,
+    source_name || null,
+    req.params.id
+  );
+  res.json(db.prepare('SELECT * FROM statements WHERE id = ?').get(req.params.id));
+});
+
 app.get('/api/reconciliation/summary', auth.requireBusinessAccess(), (req, res) => {
   const { statement_id } = req.query;
   if (!statement_id) return res.status(400).json({ error: 'statement_id required' });
 
   const statement = db.prepare('SELECT * FROM statements WHERE id = ?').get(statement_id);
-  const txns = db.prepare('SELECT * FROM transactions WHERE statement_id = ?').all(statement_id);
-  const total = txns.reduce((sum, t) => sum + t.amount, 0);
-  const reconciledCount = txns.filter(t => t.is_reconciled).length;
+  const txns = db.prepare('SELECT * FROM transactions WHERE statement_id = ? ORDER BY date').all(statement_id);
+  const clearedTotal = txns.filter(t => t.is_reconciled).reduce((sum, t) => sum + t.amount, 0);
+
+  const beginningBalance = statement.statement_beginning_balance;
+  const endingBalance = statement.statement_ending_balance;
+  const hasBothBalances = beginningBalance !== null && endingBalance !== null;
+  const targetChange = hasBothBalances ? endingBalance - beginningBalance : null;
+  const difference = hasBothBalances ? Math.round((targetChange - clearedTotal) * 100) / 100 : null;
+
+  const lockedPeriod = db.prepare('SELECT * FROM reconciliation_periods WHERE statement_id = ? ORDER BY locked_at DESC LIMIT 1').get(statement_id);
 
   res.json({
     statement,
+    transactions: txns,
     transaction_count: txns.length,
-    reconciled_count: reconciledCount,
-    net_change: total,
-    matches_statement: statement.statement_ending_balance != null
-      ? Math.abs(total - statement.statement_ending_balance) < 0.01
-      : null,
+    cleared_count: txns.filter(t => t.is_reconciled).length,
+    cleared_total: clearedTotal,
+    beginning_balance: beginningBalance,
+    ending_balance: endingBalance,
+    difference,
+    is_balanced: difference !== null && Math.abs(difference) < 0.005,
+    is_locked: !!(lockedPeriod && lockedPeriod.is_locked),
   });
+});
+
+// Checks/unchecks a single transaction as "cleared" during reconciliation —
+// the checkbox click. Doesn't finalize anything; that happens on lock.
+app.patch('/api/transactions/:id/clear', auth.requireBusinessAccess(businessIdForTransaction), auth.requireWriteAccess, (req, res) => {
+  const { is_reconciled } = req.body;
+  const txn = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
+  if (!txn) return res.status(404).json({ error: 'not found' });
+
+  const lockedPeriod = db.prepare('SELECT * FROM reconciliation_periods WHERE statement_id = ? AND is_locked = 1').get(txn.statement_id);
+  if (lockedPeriod) return res.status(400).json({ error: 'This period is already locked. Unlock it first to make changes.' });
+
+  db.prepare(`UPDATE transactions SET is_reconciled = ?, reconciled_at = ? WHERE id = ?`)
+    .run(is_reconciled ? 1 : 0, is_reconciled ? new Date().toISOString() : null, req.params.id);
+  res.json(db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id));
 });
 
 app.post('/api/reconciliation/lock', auth.requireBusinessAccess(), auth.requireWriteAccess, (req, res) => {
@@ -380,15 +469,22 @@ app.post('/api/reconciliation/lock', auth.requireBusinessAccess(), auth.requireW
   if (!statement_id) return res.status(400).json({ error: 'statement_id required' });
 
   const statement = db.prepare('SELECT * FROM statements WHERE id = ?').get(statement_id);
-  db.prepare(`UPDATE transactions SET is_reconciled = 1, reconciled_at = datetime('now') WHERE statement_id = ?`).run(statement_id);
 
   const id = uuid();
   db.prepare(`
-    INSERT INTO reconciliation_periods (id, business_id, statement_id, period_start, period_end, ending_balance, is_locked, locked_at)
-    VALUES (?,?,?,?,?,?,1,datetime('now'))
-  `).run(id, business_id, statement_id, statement.period_start, statement.period_end, statement.statement_ending_balance);
+    INSERT INTO reconciliation_periods (id, business_id, statement_id, period_start, period_end, starting_balance, ending_balance, is_locked, locked_at)
+    VALUES (?,?,?,?,?,?,?,1,datetime('now'))
+  `).run(id, business_id, statement_id, statement.period_start, statement.period_end, statement.statement_beginning_balance, statement.statement_ending_balance);
 
   res.json(db.prepare('SELECT * FROM reconciliation_periods WHERE id = ?').get(id));
+});
+
+// Reopens a locked period so transactions can be un-checked/re-checked again.
+app.post('/api/reconciliation/unlock', auth.requireBusinessAccess(), auth.requireWriteAccess, (req, res) => {
+  const { statement_id } = req.body;
+  if (!statement_id) return res.status(400).json({ error: 'statement_id required' });
+  db.prepare(`UPDATE reconciliation_periods SET is_locked = 0 WHERE statement_id = ?`).run(statement_id);
+  res.json({ ok: true });
 });
 
 app.get('/api/statements', auth.requireBusinessAccess(), (req, res) => {
