@@ -375,6 +375,20 @@ tr.uncleared-row:hover { background: var(--brick-tint); }
 .shortcut-btn:hover { border-color: var(--ledger-green); background: var(--ledger-green-tint); }
 .shortcut-icon { font-size: 22px; }
 
+.period-btn-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.period-btn {
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  border-radius: 4px;
+  padding: 7px 14px;
+  font-size: 12.5px;
+  font-family: var(--font-body);
+  cursor: pointer;
+  color: var(--ink);
+}
+.period-btn:hover { border-color: var(--ledger-green); }
+.period-btn.active { background: var(--ledger-green); border-color: var(--ledger-green); color: #fff; font-weight: 500; }
+
 /* ---------- General Ledger ---------- */
 .gl-account-block { margin-bottom: 22px; }
 .gl-account-block h3 {

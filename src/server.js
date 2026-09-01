@@ -679,6 +679,180 @@ function periodLabelFor(start, end, as_of) {
   return 'All time';
 }
 
+// ---------- Period presets & comparison math ----------
+function fmtDate(y, m, d) {
+  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+function daysInMonth(y, m) { return new Date(Date.UTC(y, m, 0)).getUTCDate(); }
+
+function getPeriodDates(preset) {
+  const now = new Date();
+  const y = now.getFullYear(), m = now.getMonth() + 1; // 1-12
+  const q = Math.ceil(m / 3); // current quarter 1-4
+
+  switch (preset) {
+    case 'this_month':
+      return { start: fmtDate(y, m, 1), end: fmtDate(y, m, daysInMonth(y, m)) };
+    case 'last_month': {
+      const lm = m === 1 ? 12 : m - 1, ly = m === 1 ? y - 1 : y;
+      return { start: fmtDate(ly, lm, 1), end: fmtDate(ly, lm, daysInMonth(ly, lm)) };
+    }
+    case 'this_quarter': {
+      const qStartMonth = (q - 1) * 3 + 1, qEndMonth = qStartMonth + 2;
+      return { start: fmtDate(y, qStartMonth, 1), end: fmtDate(y, qEndMonth, daysInMonth(y, qEndMonth)) };
+    }
+    case 'last_quarter': {
+      const lq = q === 1 ? 4 : q - 1, ly = q === 1 ? y - 1 : y;
+      const qStartMonth = (lq - 1) * 3 + 1, qEndMonth = qStartMonth + 2;
+      return { start: fmtDate(ly, qStartMonth, 1), end: fmtDate(ly, qEndMonth, daysInMonth(ly, qEndMonth)) };
+    }
+    case 'this_year':
+      return { start: fmtDate(y, 1, 1), end: fmtDate(y, 12, 31) };
+    case 'last_year':
+      return { start: fmtDate(y - 1, 1, 1), end: fmtDate(y - 1, 12, 31) };
+    default:
+      return { start: fmtDate(y, 1, 1), end: fmtDate(y, 12, 31) };
+  }
+}
+
+// The period immediately preceding `start`–`end`, same length; or the same
+// calendar dates exactly one year earlier — the two standard comparisons.
+function getPriorPeriod(start, end, mode) {
+  const [sy, sm, sd] = start.split('-').map(Number);
+  const [ey, em, ed] = end.split('-').map(Number);
+
+  if (mode === 'previous_year') {
+    return { start: fmtDate(sy - 1, sm, sd), end: fmtDate(ey - 1, em, ed) };
+  }
+
+  // Quarters and months vary in length (28-31 days), so shifting a calendar
+  // quarter/month back by a fixed day-count can drift across the boundary.
+  // Detect calendar-aligned ranges and shift by the calendar unit itself;
+  // only fall back to a raw day-count shift for genuinely custom ranges.
+  const isFullYear = sm === 1 && sd === 1 && em === 12 && ed === 31 && sy === ey;
+  const isFullQuarter = sd === 1 && [1, 4, 7, 10].includes(sm) && sy === ey && em === sm + 2 && ed === daysInMonth(ey, em);
+  const isFullMonth = sd === 1 && sy === ey && sm === em && ed === daysInMonth(ey, em);
+
+  if (isFullYear) {
+    return { start: fmtDate(sy - 1, 1, 1), end: fmtDate(sy - 1, 12, 31) };
+  }
+  if (isFullQuarter) {
+    const pq = sm === 1 ? 10 : sm - 3, py = sm === 1 ? sy - 1 : sy;
+    return { start: fmtDate(py, pq, 1), end: fmtDate(py, pq + 2, daysInMonth(py, pq + 2)) };
+  }
+  if (isFullMonth) {
+    const pm = sm === 1 ? 12 : sm - 1, py = sm === 1 ? sy - 1 : sy;
+    return { start: fmtDate(py, pm, 1), end: fmtDate(py, pm, daysInMonth(py, pm)) };
+  }
+
+  // Custom range: shift back by its own length in days.
+  const startDate = new Date(Date.UTC(sy, sm - 1, sd));
+  const endDate = new Date(Date.UTC(ey, em - 1, ed));
+  const lengthDays = Math.round((endDate - startDate) / 86400000) + 1;
+  const priorEnd = new Date(startDate.getTime() - 86400000);
+  const priorStart = new Date(priorEnd.getTime() - (lengthDays - 1) * 86400000);
+  return {
+    start: fmtDate(priorStart.getUTCFullYear(), priorStart.getUTCMonth() + 1, priorStart.getUTCDate()),
+    end: fmtDate(priorEnd.getUTCFullYear(), priorEnd.getUTCMonth() + 1, priorEnd.getUTCDate()),
+  };
+}
+
+// Merges two sets of P&L line items (current + prior period) by account name
+// so the UI can show Current | Prior | $ Change | % Change per line.
+function mergePLComparison(currentPL, priorPL) {
+  const mergeLines = (curLines, priorLines, sign) => {
+    const byName = new Map();
+    curLines.forEach(r => byName.set(r.account_name, { account_name: r.account_name, current: sign * r.total, prior: 0 }));
+    (priorLines || []).forEach(r => {
+      const existing = byName.get(r.account_name);
+      if (existing) existing.prior = sign * r.total;
+      else byName.set(r.account_name, { account_name: r.account_name, current: 0, prior: sign * r.total });
+    });
+    return [...byName.values()].map(r => ({
+      ...r,
+      change: r.current - r.prior,
+      pct_change: r.prior !== 0 ? Math.round(((r.current - r.prior) / Math.abs(r.prior)) * 1000) / 10 : null,
+    })).sort((a, b) => b.current - a.current);
+  };
+
+  return {
+    income_lines: mergeLines(currentPL.income, priorPL ? priorPL.income : [], 1),
+    expense_lines: mergeLines(currentPL.expenses, priorPL ? priorPL.expenses : [], 1),
+    total_income: { current: currentPL.total_income, prior: priorPL ? priorPL.total_income : 0 },
+    total_expenses: { current: currentPL.total_expenses, prior: priorPL ? priorPL.total_expenses : 0 },
+    net_profit: { current: currentPL.net_profit, prior: priorPL ? priorPL.net_profit : 0 },
+  };
+}
+
+app.get('/api/reports/period-presets', (req, res) => {
+  const presets = ['this_month', 'last_month', 'this_quarter', 'last_quarter', 'this_year', 'last_year'];
+  res.json(Object.fromEntries(presets.map(p => [p, getPeriodDates(p)])));
+});
+
+// P&L (and optionally Balance Sheet) for a period, with an optional
+// side-by-side comparison against the prior period or the same period a year ago.
+app.get('/api/reports/pl-compare', auth.requireBusinessAccess(), (req, res) => {
+  const { business_id, start, end, compare } = req.query;
+  const currentPL = computePL(business_id, start, end);
+  let priorPL = null, priorRange = null;
+  if (compare && compare !== 'none' && start && end) {
+    priorRange = getPriorPeriod(start, end, compare);
+    priorPL = computePL(business_id, priorRange.start, priorRange.end);
+  }
+  res.json({
+    ...mergePLComparison(currentPL, priorPL),
+    current_period_label: periodLabelFor(start, end),
+    prior_period_label: priorRange ? periodLabelFor(priorRange.start, priorRange.end) : null,
+  });
+});
+
+// Balance Sheet comparison is point-in-time: "as of" the current period's end
+// date vs "as of" the prior period's end date (e.g. end of Q3 vs end of Q2).
+function mergeBSComparison(currentBS, priorBS) {
+  const mergeLines = (curLines, priorLines) => {
+    const byName = new Map();
+    curLines.forEach(r => byName.set(r.account_name, { account_name: r.account_name, current: r.total, prior: 0 }));
+    (priorLines || []).forEach(r => {
+      const existing = byName.get(r.account_name);
+      if (existing) existing.prior = r.total;
+      else byName.set(r.account_name, { account_name: r.account_name, current: 0, prior: r.total });
+    });
+    return [...byName.values()].map(r => ({
+      ...r,
+      change: r.current - r.prior,
+      pct_change: r.prior !== 0 ? Math.round(((r.current - r.prior) / Math.abs(r.prior)) * 1000) / 10 : null,
+    })).sort((a, b) => b.current - a.current);
+  };
+  return {
+    asset_lines: mergeLines(currentBS.assets, priorBS ? priorBS.assets : []),
+    liability_lines: mergeLines(currentBS.liabilities, priorBS ? priorBS.liabilities : []),
+    equity_lines: mergeLines(currentBS.equity, priorBS ? priorBS.equity : []),
+    total_assets: { current: currentBS.total_assets, prior: priorBS ? priorBS.total_assets : 0 },
+    total_liabilities: { current: currentBS.total_liabilities, prior: priorBS ? priorBS.total_liabilities : 0 },
+    total_equity: { current: currentBS.total_equity, prior: priorBS ? priorBS.total_equity : 0 },
+  };
+}
+
+app.get('/api/reports/bs-compare', auth.requireBusinessAccess(), (req, res) => {
+  const { business_id, start, end, compare } = req.query;
+  const asOf = end || null;
+  const currentBS = computeBalanceSheet(business_id, asOf);
+  let priorBS = null, priorAsOf = null;
+  if (compare && compare !== 'none' && start && end) {
+    // Reuse the same period-shape-aware logic as the P&L comparison (handles
+    // quarter/month/year boundaries correctly) — the prior Balance Sheet
+    // date is simply the end of that prior period.
+    const priorRange = getPriorPeriod(start, end, compare);
+    priorAsOf = priorRange.end;
+    priorBS = computeBalanceSheet(business_id, priorAsOf);
+  }
+  res.json({
+    ...mergeBSComparison(currentBS, priorBS),
+    current_label: asOf ? `As of ${asOf}` : 'All time',
+    prior_label: priorAsOf ? `As of ${priorAsOf}` : null,
+  });
+});
+
 function computeGeneralLedger(business_id, start, end) {
   let query = `
     SELECT a.id AS account_id, a.name AS account_name, a.type AS account_type,
@@ -719,24 +893,45 @@ app.get('/api/reports/general-ledger/pdf', auth.requireBusinessAccess(), (req, r
   renderGeneralLedgerPdf(res, { business, ledger, periodLabel: periodLabelFor(start, end) });
 });
 
+function buildComparisonData(business_id, start, end, compare) {
+  if (!compare || compare === 'none' || !start || !end) return null;
+  const currentPL = computePL(business_id, start, end);
+  const priorRange = getPriorPeriod(start, end, compare);
+  const priorPL = computePL(business_id, priorRange.start, priorRange.end);
+  const currentBS = computeBalanceSheet(business_id, end);
+  const priorBS = computeBalanceSheet(business_id, priorRange.end);
+  return {
+    ...mergePLComparison(currentPL, priorPL),
+    current_period_label: periodLabelFor(start, end),
+    prior_period_label: periodLabelFor(priorRange.start, priorRange.end),
+    bs: {
+      ...mergeBSComparison(currentBS, priorBS),
+      current_label: `As of ${end}`,
+      prior_label: `As of ${priorRange.end}`,
+    },
+  };
+}
+
 app.get('/api/reports/financial-statements/pdf', auth.requireBusinessAccess(), (req, res) => {
-  const { business_id, start, end, as_of } = req.query;
+  const { business_id, start, end, as_of, compare } = req.query;
   const business = db.prepare('SELECT * FROM businesses WHERE id = ?').get(business_id);
+  const comparison = buildComparisonData(business_id, start, end, compare);
   const pl = computePL(business_id, start, end);
   const bs = computeBalanceSheet(business_id, as_of || end);
-  renderFinancialStatementsPdf(res, { business, pl, bs, periodLabel: periodLabelFor(start, end, as_of) });
+  renderFinancialStatementsPdf(res, { business, pl, bs, periodLabel: periodLabelFor(start, end, as_of), comparison });
 });
 
 app.post('/api/reports/financial-statements/email', auth.requireBusinessAccess(), auth.requireWriteAccess, async (req, res) => {
   if (!email.configured) return res.status(400).json({ error: 'Email is not configured. Add SMTP_HOST, SMTP_USER, and SMTP_PASS to .env.' });
-  const { business_id, to, start, end, as_of } = req.body;
+  const { business_id, to, start, end, as_of, compare } = req.body;
   if (!to) return res.status(400).json({ error: 'Recipient email required' });
 
   const business = db.prepare('SELECT * FROM businesses WHERE id = ?').get(business_id);
+  const comparison = buildComparisonData(business_id, start, end, compare);
   const pl = computePL(business_id, start, end);
   const bs = computeBalanceSheet(business_id, as_of || end);
   const periodLabel = periodLabelFor(start, end, as_of);
-  const pdfBuffer = await financialStatementsPdfBuffer({ business, pl, bs, periodLabel });
+  const pdfBuffer = await financialStatementsPdfBuffer({ business, pl, bs, periodLabel, comparison });
 
   try {
     await email.sendInvoiceEmail({

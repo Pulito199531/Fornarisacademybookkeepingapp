@@ -227,6 +227,17 @@ const ES = {
   "Revenue and Expenses": "Ingresos y Gastos", "Net Profit Trend": "Tendencia de Ganancia Neta",
   "Revenue by Client": "Ingresos por Cliente", "Create an invoice to see this.": "Crea una factura para ver esto.",
   "Spending by Category": "Gastos por Categoría", "No expenses recorded yet.": "Aún no hay gastos registrados.",
+  "This Month": "Este Mes", "Last Month": "Mes Pasado", "This Quarter": "Este Trimestre",
+  "Last Quarter": "Trimestre Pasado", "This Year": "Este Año", "Last Year": "Año Pasado",
+  "Custom Range": "Rango Personalizado", "Start date": "Fecha inicial", "End date": "Fecha final",
+  "Apply": "Aplicar", "Compare to": "Comparar con", "No comparison": "Sin comparación",
+  "Previous period": "Período anterior", "Same period last year": "Mismo período del año pasado",
+  "Current": "Actual", "Prior": "Anterior", "Change": "Cambio",
+  "Profit &amp; Loss — Comparison": "Estado de Resultados — Comparación",
+  "Current: ": "Actual: ", "Prior: ": "Anterior: ",
+  "Total Income": "Ingresos Totales", "Total Expenses": "Gastos Totales",
+  "Balance Sheet — Comparison": "Balance General — Comparación",
+  "Total Liabilities": "Pasivos Totales", "Total Equity": "Capital Total",
 };
 
 let currentLang = state.lang;
@@ -2139,15 +2150,185 @@ async function loadReconciliationHistory() {
 }
 
 // ---------- Reports ----------
+state.reportsView = state.reportsView || { preset: 'this_year', customStart: null, customEnd: null, compare: 'none' };
+
+function pctBadge(pct) {
+  if (pct === null || pct === undefined) return `<span style="color:var(--ink-soft);">—</span>`;
+  const color = pct < 0 ? 'var(--brick)' : 'var(--ledger-green)';
+  const sign = pct < 0 ? '' : '+';
+  return `<span style="color:${color};">${sign}${pct.toFixed(1)}%</span>`;
+}
+function changeSpan(change) {
+  const color = change < 0 ? 'var(--brick)' : 'var(--ledger-green)';
+  return `<span style="color:${color};">${fmt(change)}</span>`;
+}
+
 async function renderReports() {
   main.innerHTML = `<h1 class="page-title">${t('Reports')}</h1><p class="page-sub">${t('Loading…')}</p>`;
-  const pl = await api(`/reports/pl?business_id=${state.currentBusinessId}`);
-  const bs = await api(`/reports/balance-sheet?business_id=${state.currentBusinessId}`);
+  const presets = await api('/reports/period-presets');
+  const rv = state.reportsView;
+  const range = rv.preset === 'custom'
+    ? { start: rv.customStart, end: rv.customEnd }
+    : presets[rv.preset];
+
+  const presetLabels = {
+    this_month: t('This Month'), last_month: t('Last Month'),
+    this_quarter: t('This Quarter'), last_quarter: t('Last Quarter'),
+    this_year: t('This Year'), last_year: t('Last Year'), custom: t('Custom Range'),
+  };
 
   main.innerHTML = `
     <h1 class="page-title">${t('Reports')}</h1>
-    <p class="page-sub">${t('All-time figures. ')}<a href="/api/exports/pl.csv?business_id=${state.currentBusinessId}" style="color:var(--ledger-green);">${t('Export P&amp;L CSV')}</a></p>
+    <p class="page-sub"><a href="/api/exports/pl.csv?business_id=${state.currentBusinessId}" style="color:var(--ledger-green);">${t('Export P&amp;L CSV')}</a></p>
 
+    <div class="card">
+      <div class="period-btn-row">
+        ${Object.keys(presetLabels).filter(p => p !== 'custom').map(p => `
+          <button class="period-btn ${rv.preset === p ? 'active' : ''}" data-preset="${p}">${presetLabels[p]}</button>
+        `).join('')}
+        <button class="period-btn ${rv.preset === 'custom' ? 'active' : ''}" data-preset="custom">${presetLabels.custom}</button>
+      </div>
+      ${rv.preset === 'custom' ? `
+        <div class="field-row" style="margin-top:12px;">
+          <div class="field"><label class="field-label">${t('Start date')}</label><input type="date" id="customStartInput" value="${rv.customStart || ''}"></div>
+          <div class="field"><label class="field-label">${t('End date')}</label><input type="date" id="customEndInput" value="${rv.customEnd || ''}"></div>
+          <div class="field" style="align-self:flex-end;"><button class="btn" id="applyCustomRangeBtn">${t('Apply')}</button></div>
+        </div>
+      ` : `<p style="font-size:12.5px; color:var(--ink-soft); margin-top:10px; margin-bottom:0;">${range ? periodLabelDisplay(range.start, range.end) : ''}</p>`}
+
+      <div class="field-row" style="margin-top:14px; align-items:flex-end;">
+        <div class="field" style="max-width:260px;">
+          <label class="field-label">${t('Compare to')}</label>
+          <select class="form-input" id="compareSelect">
+            <option value="none" ${rv.compare === 'none' ? 'selected' : ''}>${t('No comparison')}</option>
+            <option value="previous_period" ${rv.compare === 'previous_period' ? 'selected' : ''}>${t('Previous period')}</option>
+            <option value="previous_year" ${rv.compare === 'previous_year' ? 'selected' : ''}>${t('Same period last year')}</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div id="reportsBody"></div>
+
+    <div class="card">
+      <h2>${t('Share these statements')}</h2>
+      <div style="display:flex; gap:10px;">
+        <a class="btn secondary" id="downloadPdfLink" style="text-decoration:none;" href="#" target="_blank">${t('Download PDF')}</a>
+        <button class="btn" id="emailStatementsBtn">${t('Email PDF')}</button>
+      </div>
+    </div>
+  `;
+
+  document.querySelectorAll('.period-btn').forEach(btn => {
+    btn.onclick = () => {
+      rv.preset = btn.dataset.preset;
+      if (rv.preset === 'custom' && !rv.customStart) {
+        rv.customStart = range.start;
+        rv.customEnd = range.end;
+      }
+      renderReports();
+    };
+  });
+
+  const applyBtn = $('#applyCustomRangeBtn');
+  if (applyBtn) {
+    applyBtn.onclick = () => {
+      rv.customStart = $('#customStartInput').value;
+      rv.customEnd = $('#customEndInput').value;
+      renderReports();
+    };
+  }
+
+  $('#compareSelect').onchange = (e) => { rv.compare = e.target.value; renderReports(); };
+
+  await loadReportsBody(range, rv.compare);
+
+  const pdfParams = new URLSearchParams({ business_id: state.currentBusinessId, start: range.start || '', end: range.end || '', compare: rv.compare });
+  $('#downloadPdfLink').href = `/api/reports/financial-statements/pdf?${pdfParams.toString()}`;
+
+  $('#emailStatementsBtn').onclick = async () => {
+    const to = prompt(t('Email address to send the financial statements to:'));
+    if (!to) return;
+    try {
+      await api('/reports/financial-statements/email', {
+        method: 'POST',
+        body: JSON.stringify({ business_id: state.currentBusinessId, to, start: range.start, end: range.end, compare: rv.compare }),
+      });
+      toast(t('Financial statements emailed'));
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+function periodLabelDisplay(start, end) {
+  if (!start || !end) return '';
+  return `${start} → ${end}`;
+}
+
+async function loadReportsBody(range, compare) {
+  const body = $('#reportsBody');
+  if (compare && compare !== 'none' && range.start && range.end) {
+    const [plCmp, bsCmp] = await Promise.all([
+      api(`/reports/pl-compare?business_id=${state.currentBusinessId}&start=${range.start}&end=${range.end}&compare=${compare}`),
+      api(`/reports/bs-compare?business_id=${state.currentBusinessId}&start=${range.start}&end=${range.end}&compare=${compare}`),
+    ]);
+
+    const comparisonTable = (lines, totalRow, totalLabel) => `
+      <table class="ledger">
+        <thead><tr><th>${t('Account')}</th><th class="amount">${t('Current')}</th><th class="amount">${t('Prior')}</th><th class="amount">${t('Change')}</th><th class="amount">%</th></tr></thead>
+        <tbody>
+          ${lines.length ? lines.map(r => `
+            <tr>
+              <td>${escapeHtml(r.account_name)}</td>
+              <td class="amount">${fmt(r.current)}</td>
+              <td class="amount">${fmt(r.prior)}</td>
+              <td class="amount">${changeSpan(r.change)}</td>
+              <td class="amount">${pctBadge(r.pct_change)}</td>
+            </tr>
+          `).join('') : `<tr><td colspan="5" style="color:var(--ink-soft);">—</td></tr>`}
+        </tbody>
+        <tfoot>
+          <tr style="font-weight:600; border-top:2px solid var(--ink);">
+            <td>${totalLabel}</td>
+            <td class="amount">${fmt(totalRow.current)}</td>
+            <td class="amount">${fmt(totalRow.prior)}</td>
+            <td class="amount">${changeSpan(totalRow.current - totalRow.prior)}</td>
+            <td class="amount">${pctBadge(totalRow.prior !== 0 ? Math.round(((totalRow.current - totalRow.prior) / Math.abs(totalRow.prior)) * 1000) / 10 : null)}</td>
+          </tr>
+        </tfoot>
+      </table>
+    `;
+
+    body.innerHTML = `
+      <div class="card">
+        <h2>${t('Profit &amp; Loss — Comparison')}</h2>
+        <p style="font-size:12.5px; color:var(--ink-soft); margin-bottom:10px;">${t('Current: ')}${plCmp.current_period_label} &nbsp;•&nbsp; ${t('Prior: ')}${plCmp.prior_period_label}</p>
+        <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; color:var(--ink-soft); margin-bottom:6px;">${t('Income')}</div>
+        ${comparisonTable(plCmp.income_lines, plCmp.total_income, t('Total Income'))}
+        <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; color:var(--ink-soft); margin:14px 0 6px;">${t('Expenses')}</div>
+        ${comparisonTable(plCmp.expense_lines.map(r => ({ ...r, current: -Math.abs(r.current), prior: -Math.abs(r.prior), change: -r.change })), { current: -plCmp.total_expenses.current, prior: -plCmp.total_expenses.prior }, t('Total Expenses'))}
+        <div style="margin-top:14px;">${comparisonTable([], plCmp.net_profit, t('Net Profit'))}</div>
+      </div>
+
+      <div class="card">
+        <h2>${t('Balance Sheet — Comparison')}</h2>
+        <p style="font-size:12.5px; color:var(--ink-soft); margin-bottom:10px;">${bsCmp.current_label} &nbsp;•&nbsp; ${bsCmp.prior_label}</p>
+        <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; color:var(--ink-soft); margin-bottom:6px;">${t('Assets')}</div>
+        ${comparisonTable(bsCmp.asset_lines, bsCmp.total_assets, t('Total Assets'))}
+        <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; color:var(--ink-soft); margin:14px 0 6px;">${t('Liabilities')}</div>
+        ${comparisonTable(bsCmp.liability_lines, bsCmp.total_liabilities, t('Total Liabilities'))}
+        <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; color:var(--ink-soft); margin:14px 0 6px;">${t('Equity')}</div>
+        ${comparisonTable(bsCmp.equity_lines, bsCmp.total_equity, t('Total Equity'))}
+      </div>
+    `;
+    return;
+  }
+
+  const [pl, bs] = await Promise.all([
+    api(`/reports/pl?business_id=${state.currentBusinessId}${range.start ? `&start=${range.start}&end=${range.end}` : ''}`),
+    api(`/reports/balance-sheet?business_id=${state.currentBusinessId}${range.end ? `&as_of=${range.end}` : ''}`),
+  ]);
+
+  body.innerHTML = `
     <div class="card-row">
       <div class="card">
         <h2>${t('Profit &amp; Loss')}</h2>
@@ -2169,24 +2350,7 @@ async function renderReports() {
         <div class="pl-total"><span>${t('Total Assets')}</span><span>${fmt(bs.total_assets)}</span></div>
       </div>
     </div>
-
-    <div class="card">
-      <h2>${t('Share these statements')}</h2>
-      <div style="display:flex; gap:10px;">
-        <a class="btn secondary" style="text-decoration:none;" href="/api/reports/financial-statements/pdf?business_id=${state.currentBusinessId}" target="_blank">${t('Download PDF')}</a>
-        <button class="btn" id="emailStatementsBtn">${t('Email PDF')}</button>
-      </div>
-    </div>
   `;
-
-  $('#emailStatementsBtn').onclick = async () => {
-    const to = prompt(t("Email address to send the financial statements to:"));
-    if (!to) return;
-    try {
-      await api('/reports/financial-statements/email', { method: 'POST', body: JSON.stringify({ business_id: state.currentBusinessId, to }) });
-      toast(t('Financial statements emailed'));
-    } catch (e) { toast(e.message, true); }
-  };
 }
 
 // ---------- General Ledger ----------
